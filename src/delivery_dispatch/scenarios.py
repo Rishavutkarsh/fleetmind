@@ -23,6 +23,14 @@ def _shift_point(
     )
 
 
+def _unique_points(points: tuple[tuple[int, int], ...]) -> tuple[tuple[int, int], ...]:
+    seen: list[tuple[int, int]] = []
+    for point in points:
+        if point not in seen:
+            seen.append(point)
+    return tuple(seen)
+
+
 def _vary_order(
     order: OrderState,
     grid: GridConfig,
@@ -55,6 +63,7 @@ def _vary_scenario(
     seed: int | None,
     *,
     hotspot_shift: int,
+    congestion_shift: int,
     time_shift: int,
     spatial_shift: int,
     reward_shift: int,
@@ -66,10 +75,10 @@ def _vary_scenario(
     rng = Random(f"{scenario.name}:{seed}")
     varied_grid = scenario.grid.model_copy(
         update={
-            "hotspots": tuple(
+            "hotspots": _unique_points(tuple(
                 _shift_point(point, scenario.grid.width, scenario.grid.height, rng, hotspot_shift)
                 for point in scenario.grid.hotspots
-            )
+            ))
         },
         deep=True,
     )
@@ -94,9 +103,10 @@ def _vary_scenario(
         phase.model_copy(
             update={
                 "points": tuple(
+                    _unique_points(tuple(
                     _shift_point(point, scenario.grid.width, scenario.grid.height, rng, hotspot_shift)
                     for point in phase.points
-                )
+                )))
             },
             deep=True,
         )
@@ -106,9 +116,10 @@ def _vary_scenario(
         phase.model_copy(
             update={
                 "points": tuple(
-                    _shift_point(point, scenario.grid.width, scenario.grid.height, rng, 1)
+                    _unique_points(tuple(
+                    _shift_point(point, scenario.grid.width, scenario.grid.height, rng, congestion_shift)
                     for point in phase.points
-                )
+                )))
             },
             deep=True,
         )
@@ -158,10 +169,11 @@ def build_low_demand_scenario(seed: int | None = None) -> Scenario:
         scenario,
         seed,
         hotspot_shift=0,
-        time_shift=1,
+        congestion_shift=0,
+        time_shift=0,
         spatial_shift=0,
         reward_shift=1,
-        deadline_shift=1,
+        deadline_shift=0,
     )
 
 
@@ -215,15 +227,7 @@ def build_high_demand_scenario(seed: int | None = None) -> Scenario:
         dispatch_objective="Maximize cumulative reward under sustained capacity pressure; serving everything greedily should no longer be obviously best.",
         known_future_signal="",
     )
-    return _vary_scenario(
-        scenario,
-        seed,
-        hotspot_shift=1,
-        time_shift=2,
-        spatial_shift=1,
-        reward_shift=2,
-        deadline_shift=2,
-    )
+    return scenario if seed is None else scenario
 
 
 def build_hotspot_congestion_scenario(seed: int | None = None) -> Scenario:
@@ -298,10 +302,11 @@ def build_hotspot_congestion_scenario(seed: int | None = None) -> Scenario:
         scenario,
         seed,
         hotspot_shift=1,
-        time_shift=3,
+        congestion_shift=1,
+        time_shift=2,
         spatial_shift=1,
-        reward_shift=3,
-        deadline_shift=3,
+        reward_shift=2,
+        deadline_shift=2,
     )
 
 
