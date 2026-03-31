@@ -1,0 +1,26 @@
+name: delivery-dispatch-openenv
+version: 0.1.0
+description: >
+  Deterministic last-mile delivery dispatch environment where an agent assigns
+  limited couriers to dynamic orders under deadlines, congestion, and reward tradeoffs.
+entrypoints:
+  python_api: src/delivery_dispatch/environment.py
+  inference: inference.py
+  http_api: src/delivery_dispatch/api.py
+  preflight: validate_submission.py
+models:
+  observation: delivery_dispatch.models.Observation
+  action: delivery_dispatch.models.Action
+  reward: delivery_dispatch.models.Reward
+tasks:
+  - id: low_demand
+    difficulty: easy
+  - id: high_demand
+    difficulty: medium
+  - id: hotspot_congestion
+    difficulty: hard
+validation:
+  required_methods:
+    - reset
+    - state
+    - step
