@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-ActionDict = dict[str, list[dict[str, str]]]
+ActionDict = dict[str, list[Any]]
 Point = tuple[int, int]
 
 
@@ -19,6 +19,16 @@ class CandidateAssignment:
     reward_value: float
     reward_density: float
     feasible_now: bool
+
+
+@dataclass(frozen=True)
+class CandidateRejection:
+    order_id: str
+    score: float
+    estimated_best_cost: int
+    slack_to_cutoff: int
+    reward_value: float
+    has_idle_agents: bool
 
 
 def _as_point(value: Any) -> Point:
@@ -107,6 +117,13 @@ def _idle_agents(state: dict[str, Any]) -> list[dict[str, Any]]:
     return [agent for agent in state.get("agents", []) if agent.get("status") == "idle"]
 
 
+def _service_cutoff(order: dict[str, Any]) -> int:
+    cutoff = order.get("service_cutoff_time")
+    if cutoff is not None:
+        return int(cutoff)
+    return int(order["deadline"])
+
+
 def _baseline_candidate(
     agent: dict[str, Any],
     order: dict[str, Any],
@@ -175,12 +192,67 @@ def _score_candidate(
     )
 
 
-def build_action(assignments: list[tuple[str, str]]) -> ActionDict:
+def _score_rejection_candidate(
+    order: dict[str, Any],
+    idle_agents: list[dict[str, Any]],
+    congested_zones: set[Point],
+    current_time: int,
+) -> CandidateRejection:
+    reward_value = float(order["reward_value"])
+    cutoff = _service_cutoff(order)
+    estimated_costs = [
+        estimate_job_cost(
+            _as_point(agent["location"]),
+            _as_point(order["pickup_location"]),
+            _as_point(order["drop_location"]),
+            congested_zones,
+        )
+        for agent in idle_agents
+    ]
+    estimated_best_cost = min(estimated_costs) if estimated_costs else 999
+    best_finish = current_time + estimated_best_cost
+    slack_to_cutoff = cutoff - best_finish
+    reject_pressure = 0.0
+
+    if not idle_agents:
+        reject_pressure += 4.0
+    if slack_to_cutoff < 0:
+        reject_pressure += 9.0 + (2.2 * abs(slack_to_cutoff))
+    elif slack_to_cutoff <= 1:
+        reject_pressure += 4.5
+
+    if reward_value <= 8:
+        reject_pressure += 2.4
+    elif reward_value <= 10:
+        reject_pressure += 1.6
+    elif reward_value >= 16:
+        reject_pressure -= 2.2
+
+    reward_density = reward_value / max(estimated_best_cost, 1)
+    if reward_density < 1.0:
+        reject_pressure += 3.6
+    elif reward_density < 1.35:
+        reject_pressure += 2.4
+    elif reward_density > 2.5:
+        reject_pressure -= 1.0
+
+    return CandidateRejection(
+        order_id=str(order["order_id"]),
+        score=reject_pressure,
+        estimated_best_cost=estimated_best_cost,
+        slack_to_cutoff=slack_to_cutoff,
+        reward_value=reward_value,
+        has_idle_agents=bool(idle_agents),
+    )
+
+
+def build_action(assignments: list[tuple[str, str]], rejections: list[str] | None = None) -> ActionDict:
     return {
         "assignments": [
             {"agent_id": agent_id, "order_id": order_id}
             for agent_id, order_id in assignments
-        ]
+        ],
+        "rejections": list(rejections or []),
     }
 
 
@@ -243,12 +315,41 @@ def target_policy(state: dict[str, Any]) -> ActionDict:
         chosen_orders.add(candidate.order_id)
         assignments.append((candidate.agent_id, candidate.order_id))
 
-    return build_action(assignments)
+    remaining_orders = [
+        order
+        for order in available_orders
+        if str(order["order_id"]) not in chosen_orders
+    ]
+    rejection_candidates = [
+        _score_rejection_candidate(order, idle_agents, congested_zones, current_time)
+        for order in remaining_orders
+    ]
+    rejection_candidates.sort(
+        key=lambda item: (
+            -item.score,
+            item.slack_to_cutoff,
+            item.estimated_best_cost,
+            item.order_id,
+        )
+    )
+
+    rejections: list[str] = []
+    for candidate in rejection_candidates:
+        if candidate.score < 6.5:
+            continue
+        if candidate.reward_value >= 16 and candidate.slack_to_cutoff >= -2:
+            continue
+        if candidate.reward_value >= 12 and candidate.slack_to_cutoff >= 0 and candidate.estimated_best_cost <= 8:
+            continue
+        rejections.append(candidate.order_id)
+
+    return build_action(assignments, rejections)
 
 
 __all__ = [
     "ActionDict",
     "CandidateAssignment",
+    "CandidateRejection",
     "baseline_policy",
     "build_action",
     "estimate_job_cost",

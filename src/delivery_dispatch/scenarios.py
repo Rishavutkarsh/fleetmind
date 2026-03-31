@@ -61,11 +61,12 @@ def build_high_demand_scenario() -> Scenario:
             OrderState(order_id="o14", created_at=28, pickup_location=(7, 7), drop_location=(9, 7), reward_value=12, deadline=37),
             OrderState(order_id="o15", created_at=34, pickup_location=(4, 1), drop_location=(5, 3), reward_value=8, deadline=42),
             OrderState(order_id="o16", created_at=36, pickup_location=(8, 7), drop_location=(9, 5), reward_value=14, deadline=43),
+            OrderState(order_id="o17", created_at=19, pickup_location=(1, 1), drop_location=(9, 9), reward_value=5, deadline=25),
         ),
         episode_horizon=60,
-        briefing="Demand arrives faster than the fleet can comfortably absorb, including short hotspot bursts that tempt overcommitment.",
-        dispatch_objective="Balance urgency, value density, and capacity; skipping the wrong job should hurt later throughput.",
-        known_future_signal="Expect bursty arrivals around the upper-right hotspot near t=17-22 and again late in the episode.",
+        briefing="Demand arrives faster than the fleet can comfortably absorb, including short hotspot bursts, premium clusters, and occasional low-value long-haul distractions.",
+        dispatch_objective="Balance urgency, value density, and capacity; skipping the wrong job should hurt later throughput, but some requests are not worth tying up the fleet for.",
+        known_future_signal="Expect bursty arrivals around the upper-right hotspot near t=17-22 and again late in the episode, with one low-yield cross-city distraction in the middle.",
     )
 
 
@@ -109,11 +110,12 @@ def build_hotspot_congestion_scenario() -> Scenario:
             OrderState(order_id="o16", created_at=47, pickup_location=(12, 11), drop_location=(14, 14), reward_value=21, deadline=56),
             OrderState(order_id="o17", created_at=56, pickup_location=(13, 11), drop_location=(14, 13), reward_value=21, deadline=66),
             OrderState(order_id="o18", created_at=63, pickup_location=(10, 3), drop_location=(6, 1), reward_value=10, deadline=74),
+            OrderState(order_id="o19", created_at=32, pickup_location=(1, 2), drop_location=(14, 14), reward_value=6, deadline=40),
         ),
         episode_horizon=80,
-        briefing="Large city with hotspot bursts, tight premium orders, and fixed congestion pockets. Positioning and selective commitments matter.",
-        dispatch_objective="Trade off local urgent jobs against future hotspot bursts while avoiding long congested detours that block the fleet.",
-        known_future_signal="Expect premium hotspot spikes near t=18-20 and t=47, plus occasional cross-city long-haul requests later.",
+        briefing="Large city with hotspot bursts, tight premium orders, fixed congestion pockets, and a few low-yield long-haul traps. Positioning and selective commitments matter.",
+        dispatch_objective="Trade off local urgent jobs against future hotspot bursts while avoiding long congested detours and low-value commitments that block the fleet.",
+        known_future_signal="Expect premium hotspot spikes near t=18-20 and t=47, plus an unattractive cross-city request around t=32 and other long-haul work later.",
     )
 
 
