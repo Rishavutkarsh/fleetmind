@@ -32,6 +32,7 @@ The submission is also self-contained and reproducible:
 
 Each observation includes:
 - simulation time and episode horizon
+- current decision step and configured max decision steps
 - grid dimensions, congestion zones, and hotspots
 - agent states
 - active visible orders
@@ -106,6 +107,12 @@ Run the thin API locally:
 uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
+You can start a fresh episode with a custom decision budget through:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/reset?task_id=high_demand&max_decision_steps=40"
+```
+
 ## Inference Modes
 
 ### Default self-contained mode
@@ -147,6 +154,11 @@ The container serves the API with:
 - `POST /reset`
 - `GET /state`
 - `POST /step`
+
+Episode termination:
+- episodes end when the environment reaches `done = true`
+- a configurable `max_decision_steps` cap can be passed to `/reset`
+- when the decision cap is reached, future unseen orders are ignored, assigned work is terminally resolved, and visible unassigned work is expired for final scoring
 
 ## Hugging Face Spaces
 

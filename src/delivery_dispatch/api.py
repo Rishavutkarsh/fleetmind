@@ -16,8 +16,8 @@ def health() -> dict[str, str]:
 
 
 @app.post("/reset")
-def reset(task_id: str | None = None) -> dict:
-    observation = _env.reset(task_id=task_id)
+def reset(task_id: str | None = None, max_decision_steps: int | None = None) -> dict:
+    observation = _env.reset(task_id=task_id, max_decision_steps=max_decision_steps)
     return observation.model_dump(mode="json")
 
 

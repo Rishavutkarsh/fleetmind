@@ -151,6 +151,13 @@ Each `step()` does the following:
 9. injects any new scheduled orders
 10. returns updated state, reward, done flag, and info
 
+Episodes are also bounded by a configurable `max_decision_steps` limit. When that limit is reached:
+- no further decisions are accepted
+- future unseen orders are ignored
+- already assigned orders are deterministically rolled forward and scored
+- visible unassigned orders are terminally expired and penalized
+- the environment returns a final summary through `done = true`
+
 ## Movement and Travel Cost
 
 Base movement uses grid travel.
@@ -332,6 +339,16 @@ Recommended output:
   "score": 0.75
 }
 ```
+
+## Terminal Resolution
+
+When the configured decision-step budget is exhausted:
+- assigned orders that would still finish before their service cutoff are resolved and scored
+- assigned orders that would miss cutoff are expired
+- visible unassigned orders are expired immediately
+- not-yet-visible future orders are ignored
+
+This keeps episode length bounded while preserving deterministic final scoring.
 
 ## Overall Score
 

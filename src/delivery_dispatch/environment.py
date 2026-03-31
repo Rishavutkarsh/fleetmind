@@ -36,12 +36,16 @@ class DeliveryDispatchEnv:
     late_quadratic_penalty = 0.35
     high_value_threshold = 16.0
 
-    def __init__(self, scenario_name: str = "low_demand") -> None:
+    def __init__(self, scenario_name: str = "low_demand", max_decision_steps: int | None = None) -> None:
         if scenario_name not in SCENARIO_BUILDERS:
             raise ValueError(f"Unknown scenario: {scenario_name}")
         self._scenario_name = scenario_name
+        self._configured_max_decision_steps = max_decision_steps
         self._scenario: Scenario | None = None
         self.current_time = 0
+        self.decision_step = 0
+        self.max_decision_steps = max_decision_steps or 100
+        self.arrival_freeze_time: int | None = None
         self.agents: list[AgentState] = []
         self.orders: list[OrderState] = []
         self.cumulative_reward = 0.0
@@ -58,7 +62,7 @@ class DeliveryDispatchEnv:
         }
         self.last_error_summary: dict[str, int] = {}
 
-    def reset(self, task_id: str | None = None) -> Observation:
+    def reset(self, task_id: str | None = None, max_decision_steps: int | None = None) -> Observation:
         if task_id is not None:
             if task_id not in SCENARIO_BUILDERS:
                 raise ValueError(f"Unknown scenario: {task_id}")
@@ -66,10 +70,17 @@ class DeliveryDispatchEnv:
 
         self._scenario = deepcopy(SCENARIO_BUILDERS[self._scenario_name]())
         self.current_time = 0
+        self.decision_step = 0
+        self.max_decision_steps = (
+            max_decision_steps
+            or self._configured_max_decision_steps
+            or self._scenario.default_max_decision_steps
+        )
         self.agents = list(self._scenario.agents)
         self.orders = list(self._scenario.orders)
         self.cumulative_reward = 0.0
         self.last_step_reward = 0.0
+        self.arrival_freeze_time = None
         self.recent_events = ["environment reset"]
         self.last_reward_breakdown = {}
         self.stats = {
@@ -102,6 +113,8 @@ class DeliveryDispatchEnv:
         )
         return Observation(
             time=self.current_time,
+            decision_step=self.decision_step,
+            max_decision_steps=self.max_decision_steps,
             task_id=scenario.name,
             episode_horizon=scenario.episode_horizon,
             grid=scenario.grid,
@@ -119,6 +132,7 @@ class DeliveryDispatchEnv:
             scenario_info=ScenarioInfo(
                 name=scenario.name,
                 episode_horizon=scenario.episode_horizon,
+                default_max_decision_steps=scenario.default_max_decision_steps,
                 briefing=scenario.briefing,
                 dispatch_objective=scenario.dispatch_objective,
                 known_future_signal=scenario.known_future_signal,
@@ -127,6 +141,22 @@ class DeliveryDispatchEnv:
 
     def step(self, action: Action | dict[str, Any]) -> StepResult:
         scenario = self._require_scenario()
+        if self.decision_step >= self.max_decision_steps:
+            return StepResult(
+                observation=self.state(),
+                reward=Reward(step_reward=0.0, cumulative_reward=round(self.cumulative_reward, 3)),
+                done=True,
+                info={
+                    "accepted_assignments": [],
+                    "rejected_orders": [],
+                    "invalid_assignments": [],
+                    "time_advanced_to": self.current_time,
+                    "stats": dict(self.stats),
+                    "reward_breakdown": {},
+                    "error_summary": {},
+                    "current_pressure": "episode complete",
+                },
+            )
         parsed_action = action if isinstance(action, Action) else Action.model_validate(action)
         step_reward = 0.0
         reward_breakdown = {
@@ -250,6 +280,21 @@ class DeliveryDispatchEnv:
         if expired_orders:
             self.recent_events.extend(expired_orders)
 
+        self.decision_step += 1
+        terminal_info: dict[str, int] = {}
+        if self.decision_step >= self.max_decision_steps:
+            (
+                terminal_reward,
+                terminal_events,
+                terminal_error_summary,
+                terminal_info,
+            ) = self._finalize_terminal_state()
+            step_reward += terminal_reward
+            for key, value in terminal_error_summary.items():
+                error_summary[key] = error_summary.get(key, 0) + value
+            if terminal_events:
+                self.recent_events.extend(terminal_events)
+
         self.cumulative_reward += step_reward
         self.last_step_reward = step_reward
         self.last_reward_breakdown = {
@@ -269,6 +314,7 @@ class DeliveryDispatchEnv:
             "reward_breakdown": dict(self.last_reward_breakdown),
             "error_summary": dict(self.last_error_summary),
             "current_pressure": self._pressure_summary(),
+            "terminal_resolution": terminal_info,
         }
         return StepResult(
             observation=self.state(),
@@ -286,10 +332,11 @@ class DeliveryDispatchEnv:
         return self._scenario
 
     def _visible_orders(self) -> list[OrderState]:
+        visibility_time = self.arrival_freeze_time if self.arrival_freeze_time is not None else self.current_time
         return [
             order
             for order in self.orders
-            if order.created_at <= self.current_time and order.status not in {"completed", "expired", "rejected"}
+            if order.created_at <= visibility_time and order.status not in {"completed", "expired", "rejected"}
         ]
 
     def _find_agent(self, agent_id: str) -> AgentState | None:
@@ -458,6 +505,103 @@ class DeliveryDispatchEnv:
             ]
         )
 
+    def _finalize_terminal_state(self) -> tuple[float, list[str], dict[str, int], dict[str, int]]:
+        reward = 0.0
+        events: list[str] = []
+        freeze_time = self.current_time
+        self.arrival_freeze_time = freeze_time
+        error_summary = {
+            "expired_orders": 0,
+            "high_value_orders_missed": 0,
+            "late_deliveries": 0,
+        }
+        terminal_info = {
+            "resolved_assigned_orders": 0,
+            "terminal_expired_unassigned": 0,
+            "terminal_expired_assigned": 0,
+        }
+
+        assigned_orders = [
+            order for order in self.orders if order.status == "assigned"
+        ]
+        terminal_time = max(
+            [self.current_time]
+            + [
+                order.scheduled_completion_time or self.current_time
+                for order in assigned_orders
+                if (order.scheduled_completion_time or self.current_time) <= self._service_cutoff(order)
+            ]
+        )
+
+        for order in assigned_orders:
+            agent = self._find_agent(order.assigned_agent_id) if order.assigned_agent_id else None
+            finish_time = order.scheduled_completion_time or self.current_time
+            if finish_time <= self._service_cutoff(order):
+                order.completed_at = finish_time
+                order.status = "completed"
+                if agent is not None:
+                    agent.location = order.drop_location
+                    agent.status = "idle"
+                    agent.busy_until = finish_time
+                    agent.assigned_order_id = None
+                order_reward = self._completion_reward(order, finish_time)
+                reward += order_reward
+                self.stats["completed_orders"] += 1
+                terminal_info["resolved_assigned_orders"] += 1
+
+                if finish_time <= order.deadline:
+                    self.stats["on_time_orders"] += 1
+                    if finish_time < order.deadline:
+                        events.append(
+                            f"terminal rollout completed {order.order_id} early by {order.deadline - finish_time}"
+                        )
+                    else:
+                        events.append(f"terminal rollout completed {order.order_id} on time")
+                else:
+                    self.stats["late_orders"] += 1
+                    error_summary["late_deliveries"] += 1
+                    events.append(
+                        f"terminal rollout completed {order.order_id} late by {finish_time - order.deadline}"
+                    )
+            else:
+                order.status = "expired"
+                self.stats["expired_orders"] += 1
+                terminal_info["terminal_expired_assigned"] += 1
+                penalty = -(self.missed_order_penalty_multiplier * order.reward_value)
+                reward += penalty
+                error_summary["expired_orders"] += 1
+                if order.reward_value >= self.high_value_threshold:
+                    error_summary["high_value_orders_missed"] += 1
+                if agent is not None:
+                    agent.status = "idle"
+                    agent.busy_until = self.current_time
+                    agent.assigned_order_id = None
+                events.append(f"terminal expiry for assigned order {order.order_id}")
+
+        for order in self.orders:
+            if order.status != "unassigned":
+                continue
+            if order.created_at > freeze_time:
+                continue
+            order.status = "expired"
+            self.stats["expired_orders"] += 1
+            terminal_info["terminal_expired_unassigned"] += 1
+            penalty = -(self.missed_order_penalty_multiplier * order.reward_value)
+            reward += penalty
+            error_summary["expired_orders"] += 1
+            if order.reward_value >= self.high_value_threshold:
+                error_summary["high_value_orders_missed"] += 1
+            events.append(f"terminal expiry for unassigned order {order.order_id}")
+
+        for agent in self.agents:
+            if agent.status == "busy":
+                agent.status = "idle"
+                agent.assigned_order_id = None
+                agent.busy_until = terminal_time
+
+        self.current_time = terminal_time
+        return reward, events, error_summary, terminal_info
+
     def _avoidable_idle_exists(self) -> bool:
         visible_unassigned = [
             order for order in self._visible_orders() if order.status == "unassigned"
@@ -466,6 +610,8 @@ class DeliveryDispatchEnv:
 
     def _is_done(self) -> bool:
         scenario = self._require_scenario()
+        if self.decision_step >= self.max_decision_steps:
+            return True
         if self.current_time >= scenario.episode_horizon:
             return True
         pending_orders = [

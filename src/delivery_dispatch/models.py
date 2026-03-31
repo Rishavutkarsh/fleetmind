@@ -61,6 +61,7 @@ class Scenario(BaseModel):
     agents: tuple[AgentState, ...]
     orders: tuple[OrderState, ...]
     episode_horizon: int
+    default_max_decision_steps: int = 100
     briefing: str = ""
     dispatch_objective: str = ""
     known_future_signal: str = ""
@@ -108,6 +109,7 @@ class Metrics(BaseModel):
 class ScenarioInfo(BaseModel):
     name: str
     episode_horizon: int
+    default_max_decision_steps: int = 100
     briefing: str = ""
     dispatch_objective: str = ""
     known_future_signal: str = ""
@@ -115,6 +117,8 @@ class ScenarioInfo(BaseModel):
 
 class Observation(BaseModel):
     time: int
+    decision_step: int
+    max_decision_steps: int
     task_id: str
     episode_horizon: int
     grid: GridConfig
