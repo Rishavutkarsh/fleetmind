@@ -24,11 +24,11 @@ The city is represented as a 2D grid.
 Each episode contains:
 - a fixed grid layout
 - a fixed number of delivery agents
-- a deterministic schedule of incoming orders
+- a seeded, reproducible schedule of incoming orders
 - optional hotspot zones where more orders originate
 - optional fixed congestion zones that increase movement cost
 
-The environment should remain deterministic and reproducible for grading.
+The environment should remain reproducible for grading. The same seed should recreate the same world instance.
 
 ## Core Entities
 
@@ -76,6 +76,10 @@ Hotspots affect order generation frequency, not movement directly.
 ## State Representation
 
 The `state()` output should be compact, structured, and easy for an LLM to read.
+
+Observation design principle:
+- expose raw world state and outcome signals
+- do not expose planner-side helper hints such as nearest-agent suggestions, future schedules, or direct feasibility labels
 
 Recommended state schema:
 
@@ -291,6 +295,11 @@ To preserve reproducibility:
 - use fixed hotspot coordinates per scenario
 
 Hotspots should influence where pickups appear more often, especially in the hard task.
+
+To support robustness testing without turning the benchmark into noise:
+- the environment may accept a `seed`
+- different seeds should perturb timings and spatial patterns within bounded ranges
+- the same seed should produce the same episode
 
 ## Grading
 

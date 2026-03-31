@@ -15,11 +15,16 @@ from delivery_dispatch.policies import ActionDict, baseline_policy, target_polic
 
 
 PolicyFn = Callable[[dict], ActionDict]
+EVALUATION_SEEDS = {
+    "low_demand": 101,
+    "high_demand": 202,
+    "hotspot_congestion": 303,
+}
 
 
-def run_policy(task_id: str, policy: PolicyFn) -> tuple[float, dict[str, int]]:
+def run_policy(task_id: str, policy: PolicyFn, seed: int | None = None) -> tuple[float, dict[str, int]]:
     env = DeliveryDispatchEnv(scenario_name=task_id)
-    observation = env.reset()
+    observation = env.reset(seed=seed)
 
     done = False
     while not done:
@@ -31,9 +36,9 @@ def run_policy(task_id: str, policy: PolicyFn) -> tuple[float, dict[str, int]]:
     return env.cumulative_reward, dict(env.stats)
 
 
-def run_llm_policy(task_id: str) -> tuple[float, dict[str, int]]:
+def run_llm_policy(task_id: str, seed: int | None = None) -> tuple[float, dict[str, int]]:
     env = DeliveryDispatchEnv(scenario_name=task_id)
-    observation = env.reset()
+    observation = env.reset(seed=seed)
 
     done = False
     while not done:
@@ -54,16 +59,17 @@ def score_tasks(policy_name: str) -> dict:
     task_results = []
 
     for task_id in weights:
-        baseline_reward, _ = run_policy(task_id, baseline_policy)
-        target_reward, _ = run_policy(task_id, target_policy)
+        task_seed = EVALUATION_SEEDS[task_id]
+        baseline_reward, _ = run_policy(task_id, baseline_policy, seed=task_seed)
+        target_reward, _ = run_policy(task_id, target_policy, seed=task_seed)
         lower_bound = min(baseline_reward, target_reward)
         upper_bound = max(baseline_reward, target_reward)
         if policy_name == "llm":
-            raw_reward, raw_stats = run_llm_policy(task_id)
+            raw_reward, raw_stats = run_llm_policy(task_id, seed=task_seed)
         elif policy_name == "target":
-            raw_reward, raw_stats = run_policy(task_id, target_policy)
+            raw_reward, raw_stats = run_policy(task_id, target_policy, seed=task_seed)
         else:
-            raw_reward, raw_stats = run_policy(task_id, baseline_policy)
+            raw_reward, raw_stats = run_policy(task_id, baseline_policy, seed=task_seed)
 
         task_results.append(
             grade_trajectory(

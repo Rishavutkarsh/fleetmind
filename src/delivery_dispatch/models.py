@@ -19,6 +19,13 @@ class GridConfig(BaseModel):
     hotspots: tuple[Point, ...] = ()
 
 
+class ZonePhase(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    start_time: int
+    points: tuple[Point, ...]
+
+
 class AgentState(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
 
@@ -62,6 +69,8 @@ class Scenario(BaseModel):
     orders: tuple[OrderState, ...]
     episode_horizon: int
     default_max_decision_steps: int = 100
+    hotspot_phases: tuple[ZonePhase, ...] = ()
+    congestion_phases: tuple[ZonePhase, ...] = ()
     briefing: str = ""
     dispatch_objective: str = ""
     known_future_signal: str = ""
@@ -110,6 +119,7 @@ class ScenarioInfo(BaseModel):
     name: str
     episode_horizon: int
     default_max_decision_steps: int = 100
+    used_seed: int | None = None
     briefing: str = ""
     dispatch_objective: str = ""
     known_future_signal: str = ""

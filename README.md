@@ -36,8 +36,13 @@ Each observation includes:
 - grid dimensions, congestion zones, and hotspots
 - agent states
 - active visible orders
-- recent reward feedback and events
+- minimal reward/error feedback
 - compact task metrics
+
+Design note:
+- observations are intentionally closer to raw environment state than to a planner helper API
+- derived hints such as nearest-agent suggestions or feasibility flags are not populated for the agent
+- future demand schedules are not exposed through the API
 
 Typed model:
 - `delivery_dispatch.models.Observation`
@@ -76,7 +81,10 @@ Reward is shaped over the episode:
 - penalties for invalid actions
 - penalties for avoidable idle capacity
 
-Feedback also reports quantified error summaries such as rejected orders, late deliveries, expired orders, and missed high-value work.
+Feedback is intentionally sparse:
+- `last_step_reward`
+- `cumulative_reward`
+- compact error counts such as late deliveries, expired orders, and rejected orders
 
 Typed model:
 - `delivery_dispatch.models.Reward`
@@ -111,6 +119,12 @@ You can start a fresh episode with a custom decision budget through:
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/reset?task_id=high_demand&max_decision_steps=40"
+```
+
+You can also request a reproducible seeded variant of a task:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/reset?task_id=high_demand&max_decision_steps=40&seed=7"
 ```
 
 ## Inference Modes

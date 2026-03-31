@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from random import SystemRandom
 from typing import Any
 
 from .models import (
@@ -14,6 +15,7 @@ from .models import (
     Scenario,
     ScenarioInfo,
     StepResult,
+    ZonePhase,
 )
 from .policies import estimate_job_cost
 from .scenarios import SCENARIO_BUILDERS
@@ -36,11 +38,17 @@ class DeliveryDispatchEnv:
     late_quadratic_penalty = 0.35
     high_value_threshold = 16.0
 
-    def __init__(self, scenario_name: str = "low_demand", max_decision_steps: int | None = None) -> None:
+    def __init__(
+        self,
+        scenario_name: str = "low_demand",
+        max_decision_steps: int | None = None,
+        seed: int | None = None,
+    ) -> None:
         if scenario_name not in SCENARIO_BUILDERS:
             raise ValueError(f"Unknown scenario: {scenario_name}")
         self._scenario_name = scenario_name
         self._configured_max_decision_steps = max_decision_steps
+        self._configured_seed = seed
         self._scenario: Scenario | None = None
         self.current_time = 0
         self.decision_step = 0
@@ -61,14 +69,24 @@ class DeliveryDispatchEnv:
             "invalid_actions": 0,
         }
         self.last_error_summary: dict[str, int] = {}
+        self.used_seed: int | None = None
 
-    def reset(self, task_id: str | None = None, max_decision_steps: int | None = None) -> Observation:
+    def reset(
+        self,
+        task_id: str | None = None,
+        max_decision_steps: int | None = None,
+        seed: int | None = None,
+    ) -> Observation:
         if task_id is not None:
             if task_id not in SCENARIO_BUILDERS:
                 raise ValueError(f"Unknown scenario: {task_id}")
             self._scenario_name = task_id
 
-        self._scenario = deepcopy(SCENARIO_BUILDERS[self._scenario_name]())
+        scenario_seed = seed if seed is not None else self._configured_seed
+        if scenario_seed is None:
+            scenario_seed = SystemRandom().randint(1, 10_000_000)
+        self.used_seed = scenario_seed
+        self._scenario = deepcopy(SCENARIO_BUILDERS[self._scenario_name](scenario_seed))
         self.current_time = 0
         self.decision_step = 0
         self.max_decision_steps = (
@@ -111,31 +129,37 @@ class DeliveryDispatchEnv:
             idle_agents=len([agent for agent in self.agents if agent.status == "idle"]),
             busy_agents=len([agent for agent in self.agents if agent.status == "busy"]),
         )
+        public_error_summary = {
+            key: value
+            for key, value in self.last_error_summary.items()
+            if key in {"expired_orders", "late_deliveries", "rejected_orders", "invalid_actions"}
+        }
         return Observation(
             time=self.current_time,
             decision_step=self.decision_step,
             max_decision_steps=self.max_decision_steps,
             task_id=scenario.name,
             episode_horizon=scenario.episode_horizon,
-            grid=scenario.grid,
+            grid=self._current_grid(),
             agents=agent_views,
             orders=order_views,
             feedback=Feedback(
                 last_step_reward=self.last_step_reward,
                 cumulative_reward=self.cumulative_reward,
-                recent_events=list(self.recent_events),
-                reward_breakdown=dict(self.last_reward_breakdown),
-                error_summary=dict(self.last_error_summary),
-                current_pressure=self._pressure_summary(),
+                recent_events=[],
+                reward_breakdown={},
+                error_summary=public_error_summary,
+                current_pressure="",
             ),
             metrics=metrics,
             scenario_info=ScenarioInfo(
                 name=scenario.name,
                 episode_horizon=scenario.episode_horizon,
                 default_max_decision_steps=scenario.default_max_decision_steps,
+                used_seed=self.used_seed,
                 briefing=scenario.briefing,
                 dispatch_objective=scenario.dispatch_objective,
-                known_future_signal=scenario.known_future_signal,
+                known_future_signal="",
             ),
         )
 
@@ -154,7 +178,7 @@ class DeliveryDispatchEnv:
                     "stats": dict(self.stats),
                     "reward_breakdown": {},
                     "error_summary": {},
-                    "current_pressure": "episode complete",
+                    "current_pressure": "",
                 },
             )
         parsed_action = action if isinstance(action, Action) else Action.model_validate(action)
@@ -305,15 +329,20 @@ class DeliveryDispatchEnv:
         self.last_error_summary = {key: value for key, value in error_summary.items() if value}
 
         done = self._is_done()
+        public_error_summary = {
+            key: value
+            for key, value in self.last_error_summary.items()
+            if key in {"expired_orders", "late_deliveries", "rejected_orders", "invalid_actions"}
+        }
         info = {
             "accepted_assignments": accepted_assignments,
             "rejected_orders": rejected_orders,
             "invalid_assignments": invalid_assignments,
             "time_advanced_to": self.current_time,
             "stats": dict(self.stats),
-            "reward_breakdown": dict(self.last_reward_breakdown),
-            "error_summary": dict(self.last_error_summary),
-            "current_pressure": self._pressure_summary(),
+            "reward_breakdown": {},
+            "error_summary": public_error_summary,
+            "current_pressure": "",
             "terminal_resolution": terminal_info,
         }
         return StepResult(
@@ -356,20 +385,7 @@ class DeliveryDispatchEnv:
         )
 
     def _order_view(self, order: OrderState) -> OrderState:
-        nearest_agent = self._nearest_idle_agent(order)
-        update: dict[str, Any] = {"service_cutoff_time": self._service_cutoff(order)}
-        if nearest_agent is not None:
-            service_time = self._job_time(nearest_agent, order)
-            estimated_finish = self.current_time + service_time
-            update = {
-                **update,
-                "nearest_agent_id": nearest_agent.agent_id,
-                "estimated_service_time": service_time,
-                "estimated_finish_time": estimated_finish,
-                "slack_time": order.deadline - estimated_finish,
-                "feasible_now": estimated_finish <= self._service_cutoff(order),
-            }
-        return order.model_copy(update=update, deep=True)
+        return order.model_copy(update={"service_cutoff_time": None}, deep=True)
 
     def _nearest_idle_agent(self, order: OrderState) -> AgentState | None:
         idle_agents = [agent for agent in self.agents if agent.status == "idle"]
@@ -385,7 +401,7 @@ class DeliveryDispatchEnv:
         return ranked[0]
 
     def _job_time(self, agent: AgentState, order: OrderState) -> int:
-        congested = set(self._require_scenario().grid.congested_zones)
+        congested = set(self._current_grid().congested_zones)
         return estimate_job_cost(
             agent.location,
             order.pickup_location,
@@ -631,13 +647,14 @@ class DeliveryDispatchEnv:
         visible_orders = self._visible_orders()
         unassigned_orders = [order for order in visible_orders if order.status == "unassigned"]
         idle_agents = [agent for agent in self.agents if agent.status == "idle"]
+        current_grid = self._current_grid()
         urgent_orders = [
             order for order in unassigned_orders
             if self._service_cutoff(order) - self.current_time <= 6
         ]
         hotspot_orders = [
             order for order in unassigned_orders
-            if order.pickup_location in self._require_scenario().grid.hotspots
+            if order.pickup_location in current_grid.hotspots
         ]
 
         if urgent_orders and len(idle_agents) < len(urgent_orders):
@@ -649,3 +666,30 @@ class DeliveryDispatchEnv:
         if not unassigned_orders:
             return "low pressure: no unassigned visible orders right now"
         return "moderate pressure: feasible work is available without immediate overload"
+
+    def _current_grid(self) -> Any:
+        scenario = self._require_scenario()
+        return scenario.grid.model_copy(
+            update={
+                "hotspots": self._phase_points(scenario.hotspot_phases, scenario.grid.hotspots),
+                "congested_zones": self._phase_points(
+                    scenario.congestion_phases, scenario.grid.congested_zones
+                ),
+            },
+            deep=True,
+        )
+
+    def _phase_points(
+        self,
+        phases: tuple[ZonePhase, ...],
+        fallback: tuple[tuple[int, int], ...],
+    ) -> tuple[tuple[int, int], ...]:
+        if not phases:
+            return fallback
+        chosen = fallback
+        for phase in sorted(phases, key=lambda item: item.start_time):
+            if self.current_time >= phase.start_time:
+                chosen = phase.points
+            else:
+                break
+        return chosen
