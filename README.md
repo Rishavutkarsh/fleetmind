@@ -168,6 +168,7 @@ If these environment variables are set, `inference.py` can use the OpenAI client
 - `HF_TOKEN`
 
 Without them, the submission still runs using the built-in policy.
+If they are present but the provider call fails at runtime, the scoring path falls back to the built-in target policy instead of crashing.
 
 For local development, you can copy `.env.example` and set variables in your shell or local `.env` workflow. Do not commit secrets.
 
@@ -175,6 +176,7 @@ Practical note:
 - the external Hugging Face/OpenAI-compatible path is implemented and can be wired with environment variables
 - live provider usage may still depend on available Hugging Face inference credits or billing
 - because of that, the self-contained mode remains the default submission-safe path
+- provider-side failures such as auth errors, quota exhaustion, or temporary API issues should not break local scoring or submission execution
 
 ## Docker
 
