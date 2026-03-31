@@ -12,6 +12,7 @@ Implementation note:
 - the environment is intentionally designed for LLM-style decision making
 - the submission runtime should still remain self-contained and reproducible if external model credentials are unavailable
 - optional external model execution may be supported, but the environment should remain meaningful and runnable without relying on paid provider credits
+- the HTTP API should remain equally usable by non-LLM evaluators such as heuristics, planners, or scripted policies
 
 ## One-Line Summary
 
@@ -29,6 +30,7 @@ Each episode contains:
 - optional fixed congestion zones that increase movement cost
 
 The environment should remain reproducible for grading. The same seed should recreate the same world instance.
+If no seed is provided, the environment may generate one internally, but it should return the actual `used_seed` so the run can be replayed exactly.
 
 ## Core Entities
 
@@ -114,7 +116,8 @@ Recommended state schema:
   ],
   "scenario_info": {
     "name": "hotspot_congestion",
-    "episode_horizon": 40
+    "episode_horizon": 40,
+    "used_seed": 7
   }
 }
 ```
@@ -249,11 +252,13 @@ Setup:
 Expected behavior:
 - most orders should be serviceable
 - mistakes come mostly from poor assignment choices
+- hotspot structure should be mostly stable
 
 ### Task 2: High Demand
 
 Purpose:
 - test prioritization under scarcity
+- introduce moderate but steadier world evolution
 
 Setup:
 - grid: `10x10` or `12x12`

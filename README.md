@@ -24,9 +24,9 @@ The submission is also self-contained and reproducible:
 
 ## Tasks
 
-- `low_demand`: sparse arrivals, generous deadlines
-- `high_demand`: more demand than agents can comfortably serve
-- `hotspot_congestion`: larger map with concentrated demand and fixed congestion zones
+- `low_demand`: easy benchmark with light pressure and mostly stable hotspot behavior
+- `high_demand`: medium benchmark with stronger pressure and slower world evolution
+- `hotspot_congestion`: hard benchmark with seeded hotspot and congestion shifts
 
 ## Observation Space
 
@@ -127,6 +127,33 @@ You can also request a reproducible seeded variant of a task:
 curl -X POST "http://127.0.0.1:8000/reset?task_id=high_demand&max_decision_steps=40&seed=7"
 ```
 
+If `seed` is omitted, the environment generates one and returns it through `scenario_info.used_seed` so the same run can be replayed later.
+
+## Non-LLM Evaluators
+
+This environment is intentionally usable by any evaluator, not just an LLM.
+
+Any external evaluator can:
+- call `POST /reset` to start a fresh episode
+- read the returned observation or call `GET /state`
+- choose assignments/rejections with a heuristic, planner, search policy, or custom model
+- call `POST /step` until `done = true`
+
+This makes the environment suitable for:
+- deterministic baseline policies
+- scripted evaluators
+- search or optimization agents
+- LLM-based agents
+
+There is a tiny example API client here:
+- `scripts/example_http_client.py`
+
+Example usage:
+
+```bash
+python scripts/example_http_client.py --task_id high_demand --seed 7 --max_decision_steps 25
+```
+
 ## Inference Modes
 
 ### Default self-contained mode
@@ -173,6 +200,11 @@ Episode termination:
 - episodes end when the environment reaches `done = true`
 - a configurable `max_decision_steps` cap can be passed to `/reset`
 - when the decision cap is reached, future unseen orders are ignored, assigned work is terminally resolved, and visible unassigned work is expired for final scoring
+
+Reproducibility note:
+- `low_demand` is lightly varied
+- `high_demand` is intentionally steadier
+- `hotspot_congestion` is the main seeded dynamic robustness task
 
 ## Hugging Face Spaces
 
