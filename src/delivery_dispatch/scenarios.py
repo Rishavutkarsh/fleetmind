@@ -216,12 +216,11 @@ def build_high_demand_scenario(seed: int | None = None) -> Scenario:
         default_max_decision_steps=25,
         hotspot_phases=(
             ZonePhase(start_time=0, points=((7, 7), (7, 8), (8, 7), (8, 8))),
-            ZonePhase(start_time=18, points=((6, 7), (7, 7), (7, 8), (8, 8))),
-            ZonePhase(start_time=36, points=((5, 6), (6, 6), (6, 7), (7, 7))),
+            ZonePhase(start_time=26, points=((6, 7), (7, 7), (7, 8), (8, 8))),
         ),
         congestion_phases=(
             ZonePhase(start_time=0, points=((4, 4), (4, 5), (5, 4), (5, 5), (6, 5))),
-            ZonePhase(start_time=32, points=((5, 5), (5, 6), (6, 5), (6, 6), (7, 6))),
+            ZonePhase(start_time=38, points=((5, 5), (5, 6), (6, 5), (6, 6), (7, 6))),
         ),
         briefing="Demand arrives faster than the fleet can comfortably absorb, with clustered premium bursts and low-yield long-haul distractions.",
         dispatch_objective="Maximize cumulative reward under sustained capacity pressure; serving everything greedily should no longer be obviously best.",
@@ -277,8 +276,9 @@ def build_hotspot_congestion_scenario(seed: int | None = None) -> Scenario:
         default_max_decision_steps=30,
         hotspot_phases=(
             ZonePhase(start_time=0, points=((11, 11), (11, 12), (12, 11), (12, 12), (13, 12))),
-            ZonePhase(start_time=20, points=((9, 10), (10, 10), (10, 11), (11, 11), (11, 12))),
-            ZonePhase(start_time=45, points=((6, 11), (7, 11), (7, 12), (8, 12), (8, 13))),
+            ZonePhase(start_time=18, points=((9, 10), (10, 10), (10, 11), (11, 11), (11, 12))),
+            ZonePhase(start_time=38, points=((7, 10), (7, 11), (8, 11), (8, 12), (9, 12))),
+            ZonePhase(start_time=54, points=((5, 11), (6, 11), (7, 12), (8, 12), (8, 13))),
         ),
         congestion_phases=(
             ZonePhase(
@@ -286,11 +286,11 @@ def build_hotspot_congestion_scenario(seed: int | None = None) -> Scenario:
                 points=((6, 6), (6, 7), (6, 8), (7, 6), (7, 7), (7, 8), (8, 6), (8, 7), (8, 8)),
             ),
             ZonePhase(
-                start_time=24,
+                start_time=22,
                 points=((8, 8), (8, 9), (9, 8), (9, 9), (10, 9), (10, 10), (10, 11), (11, 10)),
             ),
             ZonePhase(
-                start_time=50,
+                start_time=46,
                 points=((5, 10), (5, 11), (6, 10), (6, 11), (7, 11), (8, 11), (8, 12)),
             ),
         ),

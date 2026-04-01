@@ -627,7 +627,7 @@ class DeliveryDispatchEnv:
                 order.status = "expired"
                 self.stats["expired_orders"] += 1
                 terminal_info["terminal_expired_assigned"] += 1
-                penalty = -(self.missed_order_penalty_multiplier * order.reward_value)
+                penalty = -self._missed_order_penalty(order, finish_time)
                 reward += penalty
                 error_summary["expired_orders"] += 1
                 if order.reward_value >= self.high_value_threshold:
@@ -646,7 +646,7 @@ class DeliveryDispatchEnv:
             order.status = "expired"
             self.stats["expired_orders"] += 1
             terminal_info["terminal_expired_unassigned"] += 1
-            penalty = -(self.missed_order_penalty_multiplier * order.reward_value)
+            penalty = -self._missed_order_penalty(order, freeze_time)
             reward += penalty
             error_summary["expired_orders"] += 1
             if order.reward_value >= self.high_value_threshold:
