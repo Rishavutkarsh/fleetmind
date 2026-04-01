@@ -25,12 +25,12 @@ class DeliveryDispatchEnv:
     """Deterministic event-driven delivery dispatch simulator."""
 
     invalid_assignment_penalty = -1.0
-    idle_penalty = -0.5
+    idle_penalty = -0.35
     service_time = 1
-    missed_order_penalty_multiplier = 0.6
+    missed_order_penalty_multiplier = 0.75
     feasible_assignment_bonus = 0.5
     infeasible_assignment_penalty = -1.5
-    rejection_penalty_multiplier = 0.2
+    rejection_penalty_multiplier = 0.4
     service_grace_window = 4
     early_bonus_per_tick = 0.45
     early_bonus_cap = 4
@@ -217,7 +217,7 @@ class DeliveryDispatchEnv:
                 self.recent_events.append(f"ignored invalid rejection for {order_id}")
                 continue
 
-            rejection_penalty = -max(1.0, self.rejection_penalty_multiplier * order.reward_value)
+            rejection_penalty = -self._rejection_penalty(order)
             step_reward += rejection_penalty
             reward_breakdown["rejection_penalty"] += rejection_penalty
             order.status = "rejected"
@@ -272,10 +272,10 @@ class DeliveryDispatchEnv:
                 f"assigned {order.order_id} to {agent.agent_id} until t={agent.busy_until}"
             )
 
-        if self._avoidable_idle_exists():
+        avoidable_idle_slots = self._avoidable_idle_slots()
+        if avoidable_idle_slots > 0:
             idle_agents = len([agent for agent in self.agents if agent.status == "idle"])
-            pending_orders = len([order for order in self._visible_orders() if order.status == "unassigned"])
-            idle_penalty = self.idle_penalty * min(idle_agents, pending_orders)
+            idle_penalty = self.idle_penalty * min(idle_agents, avoidable_idle_slots)
             step_reward += idle_penalty
             reward_breakdown["idle_penalty"] += idle_penalty
             self.recent_events.append("avoidable idle capacity remained")
@@ -494,7 +494,7 @@ class DeliveryDispatchEnv:
             if self._service_cutoff(order) < self.current_time:
                 order.status = "expired"
                 self.stats["expired_orders"] += 1
-                penalty += -(self.missed_order_penalty_multiplier * order.reward_value)
+                penalty -= self._missed_order_penalty(order, self.current_time)
                 events.append(f"order {order.order_id} expired")
                 if order.reward_value >= self.high_value_threshold:
                     high_value_missed += 1
@@ -618,11 +618,17 @@ class DeliveryDispatchEnv:
         self.current_time = terminal_time
         return reward, events, error_summary, terminal_info
 
-    def _avoidable_idle_exists(self) -> bool:
-        visible_unassigned = [
-            order for order in self._visible_orders() if order.status == "unassigned"
+    def _avoidable_idle_slots(self) -> int:
+        idle_agents = [agent for agent in self.agents if agent.status == "idle"]
+        if not idle_agents:
+            return 0
+
+        worthwhile_orders = [
+            order
+            for order in self._visible_orders()
+            if order.status == "unassigned" and self._is_worth_serving_now(order, idle_agents)
         ]
-        return any(agent.status == "idle" for agent in self.agents) and bool(visible_unassigned)
+        return len(worthwhile_orders)
 
     def _is_done(self) -> bool:
         scenario = self._require_scenario()
@@ -693,3 +699,49 @@ class DeliveryDispatchEnv:
             else:
                 break
         return chosen
+
+    def _best_idle_finish_time(self, order: OrderState, idle_agents: list[AgentState] | None = None) -> int | None:
+        idle_agents = idle_agents or [agent for agent in self.agents if agent.status == "idle"]
+        if not idle_agents:
+            return None
+        best_cost = min(self._job_time(agent, order) for agent in idle_agents)
+        return self.current_time + best_cost
+
+    def _priority_multiplier(self, order: OrderState, reference_time: int) -> float:
+        urgency = order.deadline - reference_time
+        multiplier = 1.0
+        if order.reward_value >= self.high_value_threshold:
+            multiplier += 0.3
+        elif order.reward_value >= 12:
+            multiplier += 0.15
+
+        if urgency <= 3:
+            multiplier += 0.3
+        elif urgency <= 6:
+            multiplier += 0.15
+        return multiplier
+
+    def _missed_order_penalty(self, order: OrderState, reference_time: int) -> float:
+        return self.missed_order_penalty_multiplier * order.reward_value * self._priority_multiplier(
+            order, reference_time
+        )
+
+    def _rejection_penalty(self, order: OrderState) -> float:
+        expiry_penalty = self._missed_order_penalty(order, self.current_time)
+        best_finish = self._best_idle_finish_time(order)
+        if best_finish is None:
+            ratio = 0.55
+        elif best_finish > self._service_cutoff(order):
+            ratio = 0.5
+        elif best_finish > order.deadline:
+            ratio = 0.65
+        else:
+            ratio = 0.8
+        return max(1.0, expiry_penalty * ratio, self.rejection_penalty_multiplier * order.reward_value)
+
+    def _is_worth_serving_now(self, order: OrderState, idle_agents: list[AgentState]) -> bool:
+        best_finish = self._best_idle_finish_time(order, idle_agents)
+        if best_finish is None or best_finish > self._service_cutoff(order):
+            return False
+        delivery_value = self._completion_reward(order, best_finish)
+        return delivery_value >= max(3.0, self._rejection_penalty(order) * 1.2)

@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fleetmind"
+version = "0.1.0"
+description = "OpenEnv delivery dispatch environment for sequential agent evaluation."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic==2.12.5",
+  "openai==2.30.0",
+  "fastapi==0.135.2",
+  "uvicorn==0.42.0",
+  "pyyaml==6.0.1",
+  "requests==2.32.3",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
