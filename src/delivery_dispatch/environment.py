@@ -31,6 +31,8 @@ class DeliveryDispatchEnv:
     feasible_assignment_bonus = 0.5
     infeasible_assignment_penalty = -1.5
     rejection_penalty_multiplier = 0.4
+    passive_wait_penalty = -0.25
+    passive_wait_penalty_cap = 3
     service_grace_window = 4
     early_bonus_per_tick = 0.45
     early_bonus_cap = 4
@@ -70,6 +72,18 @@ class DeliveryDispatchEnv:
         }
         self.last_error_summary: dict[str, int] = {}
         self.used_seed: int | None = None
+        self.total_lateness = 0
+        self.consecutive_passive_steps = 0
+        self.cumulative_reward_components = {
+            "completion_reward": 0.0,
+            "expiry_penalty": 0.0,
+            "rejection_penalty": 0.0,
+            "idle_penalty": 0.0,
+            "passive_wait_penalty": 0.0,
+            "invalid_assignment_penalty": 0.0,
+            "infeasible_assignment_penalty": 0.0,
+            "valid_assignment_bonus": 0.0,
+        }
 
     def reset(
         self,
@@ -110,6 +124,18 @@ class DeliveryDispatchEnv:
             "invalid_actions": 0,
         }
         self.last_error_summary = {}
+        self.total_lateness = 0
+        self.consecutive_passive_steps = 0
+        self.cumulative_reward_components = {
+            "completion_reward": 0.0,
+            "expiry_penalty": 0.0,
+            "rejection_penalty": 0.0,
+            "idle_penalty": 0.0,
+            "passive_wait_penalty": 0.0,
+            "invalid_assignment_penalty": 0.0,
+            "infeasible_assignment_penalty": 0.0,
+            "valid_assignment_bonus": 0.0,
+        }
         return self.state()
 
     def state(self) -> Observation:
@@ -189,6 +215,7 @@ class DeliveryDispatchEnv:
             "infeasible_assignment_penalty": 0.0,
             "invalid_assignment_penalty": 0.0,
             "idle_penalty": 0.0,
+            "passive_wait_penalty": 0.0,
             "completion_reward": 0.0,
             "expiry_penalty": 0.0,
         }
@@ -280,6 +307,17 @@ class DeliveryDispatchEnv:
             reward_breakdown["idle_penalty"] += idle_penalty
             self.recent_events.append("avoidable idle capacity remained")
 
+        if not accepted_assignments and not rejected_orders and avoidable_idle_slots > 0:
+            self.consecutive_passive_steps += 1
+            passive_penalty = self.passive_wait_penalty * min(
+                self.consecutive_passive_steps, self.passive_wait_penalty_cap
+            )
+            step_reward += passive_penalty
+            reward_breakdown["passive_wait_penalty"] += passive_penalty
+            self.recent_events.append("passive waiting while worthwhile work remained")
+        else:
+            self.consecutive_passive_steps = 0
+
         next_time = self._next_event_time()
         if next_time is None:
             next_time = scenario.episode_horizon
@@ -326,6 +364,8 @@ class DeliveryDispatchEnv:
             for key, value in reward_breakdown.items()
             if abs(value) > 1e-9
         }
+        for key, value in reward_breakdown.items():
+            self.cumulative_reward_components[key] += value
         self.last_error_summary = {key: value for key, value in error_summary.items() if value}
 
         done = self._is_done()
@@ -345,6 +385,8 @@ class DeliveryDispatchEnv:
             "current_pressure": "",
             "terminal_resolution": terminal_info,
         }
+        if done:
+            info["episode_summary"] = self._episode_summary()
         return StepResult(
             observation=self.state(),
             reward=Reward(
@@ -473,6 +515,7 @@ class DeliveryDispatchEnv:
             else:
                 self.stats["late_orders"] += 1
                 late_deliveries += 1
+                self.total_lateness += lateness
                 if order.completed_at > self._service_cutoff(order):
                     events.append(f"order {order.order_id} completed beyond service cutoff")
                 else:
@@ -576,6 +619,7 @@ class DeliveryDispatchEnv:
                 else:
                     self.stats["late_orders"] += 1
                     error_summary["late_deliveries"] += 1
+                    self.total_lateness += finish_time - order.deadline
                     events.append(
                         f"terminal rollout completed {order.order_id} late by {finish_time - order.deadline}"
                     )
@@ -699,6 +743,29 @@ class DeliveryDispatchEnv:
             else:
                 break
         return chosen
+
+    def _episode_summary(self) -> dict[str, float | int]:
+        late_orders = self.stats["late_orders"]
+        expired_penalty = -self.cumulative_reward_components["expiry_penalty"]
+        rejection_penalty = -self.cumulative_reward_components["rejection_penalty"]
+        idle_penalty = -self.cumulative_reward_components["idle_penalty"]
+        return {
+            "cumulative_reward": round(self.cumulative_reward, 3),
+            "decision_steps_used": self.decision_step,
+            "average_lateness": round(self.total_lateness / late_orders, 3) if late_orders else 0.0,
+            "reward_lost_to_expiry": round(expired_penalty, 3),
+            "reward_lost_to_rejection": round(rejection_penalty, 3),
+            "cumulative_idle_penalty": round(idle_penalty, 3),
+            "cumulative_passive_wait_penalty": round(
+                -self.cumulative_reward_components["passive_wait_penalty"], 3
+            ),
+            "cumulative_invalid_action_penalty": round(
+                -self.cumulative_reward_components["invalid_assignment_penalty"], 3
+            ),
+            "cumulative_infeasible_assignment_penalty": round(
+                -self.cumulative_reward_components["infeasible_assignment_penalty"], 3
+            ),
+        }
 
     def _best_idle_finish_time(self, order: OrderState, idle_agents: list[AgentState] | None = None) -> int | None:
         idle_agents = idle_agents or [agent for agent in self.agents if agent.status == "idle"]

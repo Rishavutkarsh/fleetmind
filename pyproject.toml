@@ -9,6 +9,7 @@ description = "OpenEnv delivery dispatch environment for sequential agent evalua
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "openenv-core>=0.2.0",
   "pydantic==2.12.5",
   "openai==2.30.0",
   "fastapi==0.135.2",
@@ -16,6 +17,9 @@ dependencies = [
   "pyyaml==6.0.1",
   "requests==2.32.3",
 ]
+
+[project.scripts]
+server = "server.app:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

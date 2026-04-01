@@ -6,38 +6,54 @@ Use this prompt when evaluating an external agent against Fleetmind without givi
 
 Maximize cumulative reward in the live environment by interacting only through the HTTP API.
 
-## Instructions
+## Core Principle
 
-You are interacting with a live delivery-dispatch environment as a black-box external agent.
+Treat Fleetmind as a black-box environment.
 
-You may use any reasoning tools available to you, including calculations, helper code, or temporary scripts, but you must not inspect the environment source code or hidden files. Treat the HTTP API as the only interface to the environment.
+You may use any reasoning or planning tools available to you, including calculations, helper code, temporary scripts, or policy notes, but you must not inspect the environment source code, repository files, or hidden implementation details. The HTTP API is the only allowed interface to the environment itself.
 
-Use only these endpoints:
+## Allowed Endpoints
+
 - `GET /health`
 - `POST /reset`
 - `GET /state`
 - `POST /step`
 
-## Required Workflow
+## Recommended Evaluation Flow
 
 1. Call `GET /health` to confirm the service is live.
 2. Start a fresh episode with `POST /reset`.
 3. Play the episode entirely through repeated `POST /step` calls until `done = true`.
-4. Use `GET /state` only if needed for recovery or inspection.
-5. Choose assignments and rejections based only on API observations and returned feedback.
+4. Use `GET /state` only when needed for recovery, inspection, or consistency checks.
+5. Base all decisions only on API observations and returned feedback.
 
-## Constraints
+## Agent Freedom
 
-- Do not inspect local repository files or source code.
-- Do not assume hidden future orders or hidden reward terms beyond what can be inferred from the API.
-- Do not modify the environment implementation.
-- You may write local scratch logic for your own planning, but the environment must be treated as a black box.
+The agent is allowed to:
+- compute distances, route costs, or heuristics externally
+- write temporary helper scripts or planning code
+- keep notes or policy summaries across episodes
+- retry on new seeds and compare strategies
+
+The agent is not allowed to:
+- inspect local repository files or source code
+- rely on hidden future schedules or undisclosed reward logic
+- modify the environment implementation
+
+## Suggested Curriculum
+
+If you are evaluating learning or strategy improvement across multiple runs:
+- start with `low_demand`
+- move to `high_demand`
+- finish on `hotspot_congestion`
+
+This keeps the progression aligned with the environment's intended easy -> medium -> hard ladder.
 
 ## Final Report
 
-At the end of the episode, report:
+At the end of each evaluation run, report:
 - final cumulative reward
-- the policy or strategy you converged on
+- the policy or strategy you followed
 - key assignment and rejection decisions
 - what the API feedback taught you
 - what felt confusing, too easy, too derived, or gameable
