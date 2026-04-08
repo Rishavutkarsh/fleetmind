@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from .environment import V3DeliveryDispatchEnv
 from .models import V3Action
-from .task_adapter import PUBLIC_TASK_IDS
+from .task_adapter import PUBLIC_TASK_IDS, is_public_task_id
 
 
 def create_app() -> FastAPI:
@@ -17,8 +17,11 @@ def create_app() -> FastAPI:
 
     @app.post("/reset")
     def reset(task_id: str | None = None, seed: int | None = None, pool_name: str = "test") -> dict:
-        if task_id is not None and task_id not in PUBLIC_TASK_IDS:
-            task_id = task_id
+        if task_id is not None and not is_public_task_id(task_id):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown task_id '{task_id}'. Expected one of: {', '.join(PUBLIC_TASK_IDS)}",
+            )
         return env.reset(task_id=task_id, seed=seed, pool_name=pool_name).model_dump(mode="json")
 
     @app.get("/state")

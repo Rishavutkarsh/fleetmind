@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from functools import lru_cache
 
 from .environment import V3DeliveryDispatchEnv
 from .models import V3TaskResult
 from .policies import baseline_policy, heuristic_policy
 from .solver import solve_exact
 
+STRICT_SCORE_EPSILON = 1e-4
+
 
 def grade_episode(task_id: str, seed: int, raw_reward: float) -> V3TaskResult:
-    baseline_reward = rollout_policy(task_id, seed, policy_name="baseline")
-    heuristic_reward = rollout_policy(task_id, seed, policy_name="heuristic")
-    target_reward = optimal_reward(task_id, seed)
+    baseline_reward = cached_rollout_policy(task_id, seed, policy_name="baseline")
+    heuristic_reward = cached_rollout_policy(task_id, seed, policy_name="heuristic")
+    target_reward = cached_optimal_reward(task_id, seed)
     score = normalize_score(raw_reward, baseline_reward, target_reward)
     return V3TaskResult(
         task_id=task_id,
@@ -34,6 +37,11 @@ def rollout_policy(task_id: str, seed: int, policy_name: str = "baseline") -> fl
     return env.cumulative_reward
 
 
+@lru_cache(maxsize=512)
+def cached_rollout_policy(task_id: str, seed: int, policy_name: str = "baseline") -> float:
+    return rollout_policy(task_id, seed, policy_name=policy_name)
+
+
 def optimal_reward(
     task_id: str,
     seed: int,
@@ -50,6 +58,11 @@ def optimal_reward(
     return reward
 
 
+@lru_cache(maxsize=512)
+def cached_optimal_reward(task_id: str, seed: int) -> float:
+    return optimal_reward(task_id, seed)
+
+
 def timed_optimal_reward(task_id: str, seed: int) -> tuple[float, float]:
     started_at = time.perf_counter()
     reward = optimal_reward(task_id, seed)
@@ -58,6 +71,9 @@ def timed_optimal_reward(task_id: str, seed: int) -> tuple[float, float]:
 
 
 def normalize_score(raw_reward: float, baseline_reward: float, target_reward: float) -> float:
+    lower = STRICT_SCORE_EPSILON
+    upper = 1.0 - STRICT_SCORE_EPSILON
     if target_reward <= baseline_reward:
-        return 1.0 if raw_reward >= target_reward else 0.0
-    return max(0.0, min(1.0, (raw_reward - baseline_reward) / (target_reward - baseline_reward)))
+        return upper if raw_reward >= target_reward else lower
+    score = (raw_reward - baseline_reward) / (target_reward - baseline_reward)
+    return max(lower, min(upper, score))

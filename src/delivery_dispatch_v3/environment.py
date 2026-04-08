@@ -32,6 +32,7 @@ class V3DeliveryDispatchEnv:
         self.last_step_reward = 0.0
         self.recent_events: list[str] = []
         self.done = False
+        self.last_episode_summary: dict[str, object] | None = None
 
     def reset(
         self,
@@ -71,6 +72,7 @@ class V3DeliveryDispatchEnv:
         self.last_step_reward = 0.0
         self.recent_events = ["environment reset"]
         self.done = False
+        self.last_episode_summary = None
         return self.state()
 
     def reset_internal(
@@ -92,6 +94,7 @@ class V3DeliveryDispatchEnv:
         self.last_step_reward = 0.0
         self.recent_events = ["environment reset"]
         self.done = False
+        self.last_episode_summary = None
         return self.state()
 
     def state(self) -> V3Observation:
@@ -129,16 +132,22 @@ class V3DeliveryDispatchEnv:
                 total_rounds=recipe.profile.total_rounds,
                 total_couriers=recipe.profile.courier_count,
                 max_repositions_per_round=recipe.profile.max_repositions_per_round,
+                objective_brief="Maximize cumulative delivery reward across the full episode, not just the current round.",
+                action_brief="Return target courier counts for every zone; counts should sum to the total courier count.",
+                episode_brief="An episode lasts for a fixed number of rounds and ends when done=true.",
             ),
         )
 
     def step(self, action: V3Action, grade_terminal: bool = True) -> V3StepResult:
         if self.done:
+            info: dict[str, object] = {"message": "episode already finished"}
+            if self.last_episode_summary is not None:
+                info["episode_summary"] = dict(self.last_episode_summary)
             return V3StepResult(
                 observation=self.state(),
                 reward=V3Reward(step_reward=0.0, cumulative_reward=self.cumulative_reward),
                 done=True,
-                info={"message": "episode already finished"},
+                info=info,
             )
 
         recipe = self._require_recipe()
@@ -188,13 +197,14 @@ class V3DeliveryDispatchEnv:
                 seed=self.internal_seed,
                 raw_reward=self.cumulative_reward,
             )
-            info["episode_summary"] = {
+            self.last_episode_summary = {
                 "raw_reward": round(task_result.raw_reward, 3),
                 "baseline_reward": round(task_result.baseline_reward, 3),
                 "target_reward": round(task_result.target_reward, 3),
                 "heuristic_reward": None if task_result.heuristic_reward is None else round(task_result.heuristic_reward, 3),
                 "graded_score": round(task_result.score, 4),
             }
+            info["episode_summary"] = dict(self.last_episode_summary)
 
         return V3StepResult(
             observation=self.state(),
@@ -217,6 +227,7 @@ class V3DeliveryDispatchEnv:
         clone.last_step_reward = self.last_step_reward
         clone.recent_events = list(self.recent_events)
         clone.done = self.done
+        clone.last_episode_summary = None if self.last_episode_summary is None else dict(self.last_episode_summary)
         return clone
 
     def _require_recipe(self) -> HiddenRecipe:

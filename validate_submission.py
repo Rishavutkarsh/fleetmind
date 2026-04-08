@@ -53,7 +53,7 @@ def validate_inference() -> dict:
     check("tasks" in result and "overall_score" in result, "inference output missing keys")
     check(len(result["tasks"]) >= 3, "inference must score at least three tasks")
     for task in result["tasks"]:
-        check(0.0 <= float(task["score"]) <= 1.0, f"task score out of range for {task['task_id']}")
+        check(0.0 < float(task["score"]) < 1.0, f"task score must be strictly between 0 and 1 for {task['task_id']}")
     return result
 
 
@@ -75,6 +75,25 @@ def validate_inference_cli_output() -> None:
     check("[END]" in stdout, "inference.py stdout is missing [END] block")
 
 
+def validate_inference_cli_output_with_configured_llm_if_present() -> None:
+    env = os.environ.copy()
+    token = env.get("HF_TOKEN") or env.get("OPENAI_API_KEY")
+    if not token:
+        return
+    completed = subprocess.run(
+        [sys.executable, "inference.py"],
+        cwd=Path(__file__).resolve().parent,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
+    )
+    stdout = completed.stdout
+    check("[START]" in stdout, "configured inference.py stdout is missing [START] block")
+    check("[STEP]" in stdout, "configured inference.py stdout is missing [STEP] block")
+    check("[END]" in stdout, "configured inference.py stdout is missing [END] block")
+
+
 def validate_http_api() -> None:
     client = TestClient(app)
     health = client.get("/health")
@@ -85,6 +104,9 @@ def validate_http_api() -> None:
         check(reset.status_code == 200, f"/reset must return 200 for {task_id}")
         reset_body = reset.json()
         check(reset_body["task_id"] == task_id, f"/reset should expose requested public task {task_id}")
+
+    invalid_reset = client.post("/reset", params={"task_id": "unknown_dispatch"})
+    check(invalid_reset.status_code == 400, "/reset must reject unknown task_id with 400")
 
     reset = client.post("/reset")
     check(reset.status_code == 200, "/reset without task_id must return 200")
@@ -114,6 +136,7 @@ def main() -> None:
     validate_environment_contract()
     inference_result = validate_inference()
     validate_inference_cli_output()
+    validate_inference_cli_output_with_configured_llm_if_present()
     validate_http_api()
     validate_docker_build()
 

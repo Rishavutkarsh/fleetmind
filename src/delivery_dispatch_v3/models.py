@@ -99,6 +99,9 @@ class V3ScenarioInfo(BaseModel):
     total_rounds: int
     total_couriers: int
     max_repositions_per_round: int
+    objective_brief: str = ""
+    action_brief: str = ""
+    episode_brief: str = ""
 
 
 class V3Observation(BaseModel):
