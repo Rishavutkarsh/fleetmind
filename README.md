@@ -4,25 +4,143 @@ sdk: docker
 app_port: 7860
 ---
 
-# Fleetmind V3 OpenEnv
+# Fleetmind
 
-Fleetmind V3 is a delivery benchmark for the Meta x Scaler OpenEnv hackathon. Agents allocate couriers across zones under noisy visible demand while the evaluator grades against an exact privileged dynamic program over the hidden future.
+**Can an AI run a city's delivery fleet when tomorrow's demand is hidden?**
 
-The root submission path is now `v3`:
-- root `app.py`
-- root `openenv.yaml`
-- root `inference.py`
-- root `validate_submission.py`
+**Fleetmind is a benchmark for real-world orchestration.**
 
-## Public Tasks
+Fleetmind is a delivery benchmark for long-horizon decision making under uncertainty. An agent sees the current city state: active zones, visible demand, courier availability, and local congestion. It must decide how to rebalance the fleet before the next wave of demand arrives.
 
-- `easy_dispatch`
-- `medium_dispatch`
-- `hard_dispatch`
+That is the core tension:
+- the agent must reason from partial signals
+- the environment reveals demand round by round
+- the benchmark measures whether the fleet was positioned well over time
 
-These public task ids map internally to curated `v3` seed pools. Agents only see the public task id and public seed.
+This makes Fleetmind a benchmark about anticipation, not just reaction.
 
-## API
+## Real-World Orchestrator
+
+Fleetmind is designed around a simple but important question:
+
+**Can an LLM behave like a real operational orchestrator instead of just a reactive assistant?**
+
+In Fleetmind, the model is not answering a static question. It is:
+- allocating scarce courier capacity
+- reacting to shifting demand
+- balancing immediate service against future positioning
+- operating under uncertainty the way real dispatch systems do
+
+That framing is a big part of what makes the benchmark compelling.
+
+## Visual Overview
+
+```mermaid
+flowchart LR
+    A["Visible city state"] --> B["LLM dispatcher"]
+    B --> C["Fleet reallocation decision"]
+    C --> D["Couriers move across zones"]
+    D --> E["Orders get served or missed"]
+    E --> F["Next demand wave arrives"]
+    F --> A
+```
+
+## Why Fleetmind Is Interesting
+
+Most agent benchmarks reward good local moves. Fleetmind is designed to reward good positioning.
+
+The hard part is not clicking the obvious best action right now. The hard part is deciding:
+- whether a current spike is real demand or a decoy
+- which zones deserve extra courier coverage before the evidence is obvious
+- when to preserve flexibility instead of overcommitting
+- how to trade immediate service against future coverage
+
+In other words: the agent sees the city, but not the future.
+
+## What We Built
+
+Fleetmind V3 is a fully playable OpenEnv-style benchmark with:
+- a clean `reset / state / step` API
+- public task tiers:
+  - `easy_dispatch`
+  - `medium_dispatch`
+  - `hard_dispatch`
+- hidden curated case banks behind public seeds
+- deterministic graded episodes
+- deterministic validation and Docker packaging
+- a live Hugging Face Space deployment
+
+Submission-facing shell:
+- [app.py](/C:/Users/risha/Documents/New project/app.py)
+- [openenv.yaml](/C:/Users/risha/Documents/New project/openenv.yaml)
+- [inference.py](/C:/Users/risha/Documents/New project/inference.py)
+- [validate_submission.py](/C:/Users/risha/Documents/New project/validate_submission.py)
+
+Core benchmark implementation:
+- [api.py](/C:/Users/risha/Documents/New project/src/delivery_dispatch_v3/api.py)
+- [environment.py](/C:/Users/risha/Documents/New project/src/delivery_dispatch_v3/environment.py)
+- [generator.py](/C:/Users/risha/Documents/New project/src/delivery_dispatch_v3/generator.py)
+- [solver.py](/C:/Users/risha/Documents/New project/src/delivery_dispatch_v3/solver.py)
+- [grading.py](/C:/Users/risha/Documents/New project/src/delivery_dispatch_v3/grading.py)
+- [seed_catalog.py](/C:/Users/risha/Documents/New project/src/delivery_dispatch_v3/seed_catalog.py)
+
+## The Benchmark Design
+
+Fleetmind uses a delivery-domain benchmark family with:
+- `K` delivery zones
+- `M` couriers
+- `T` decision rounds
+- visible current demand by zone
+- hidden future demand patterns
+- optional congestion and premium windows
+
+At each round, the agent chooses a target courier allocation across zones.
+
+The agent sees:
+- current visible orders
+- per-order rewards
+- congestion multipliers
+- courier counts by zone
+- remaining rounds
+
+This lets us build tasks that are:
+- hard for the agent
+- practical to evaluate at benchmark scale
+
+That was a central design goal.
+
+## Why It Feels Different
+
+Fleetmind is not trying to be a flashy simulator.
+
+It is intentionally shaped around a realistic orchestration loop:
+- observe the city
+- move capacity
+- live with the downstream consequences
+- adapt on the next round
+
+That means success depends on operational judgment, not just finding a locally attractive move.
+
+## Difficulty Tiers
+
+Fleetmind keeps the interface simple, and scales difficulty through hidden structure rather than simulator clutter.
+
+### Easy
+- visible demand is fairly informative
+- sensible rebalancing works reasonably well
+- strong one-shot policies can do well
+
+### Medium
+- current demand starts to mislead
+- short-term greed leaves value on the table
+- repositioning becomes strategically important
+
+### Hard
+- future demand stays ambiguous for longer
+- overcommitting early creates downstream regret
+- the agent must hedge, infer, and adapt over time
+
+## Public API
 
 Endpoints:
 - `GET /health`
@@ -32,19 +150,19 @@ Endpoints:
 
 `POST /reset` behavior:
 - with `task_id`, starts a fresh episode in that tier
-- with `seed`, deterministically maps the public seed to a hidden curated test case
-- with no `seed`, randomly selects a hidden curated test case
-- with no `task_id`, randomly chooses one of the three public tasks
+- with `seed`, deterministically maps the public seed to a hidden curated case
+- with no `seed`, randomly selects a hidden curated case
+- with no `task_id`, randomly chooses one of the public tasks
 
-Observations include:
+The observation includes:
 - `task_id`
 - `round_index`
 - `remaining_rounds`
-- current zone snapshots
-- feedback
-- `scenario_info` with public seed and fleet limits
+- per-zone courier and demand state
+- feedback from the last step
+- `scenario_info` with fleet limits and episode hints
 
-Actions use strict JSON:
+Example action format:
 
 ```json
 {
@@ -59,88 +177,62 @@ Actions use strict JSON:
 
 Rules:
 - include every zone exactly once
-- courier counts must sum to the total courier count
-- negative counts are invalid
-- moves above the per-round reposition cap are penalized and ignored
+- counts must sum to the total courier count
+- invalid or over-cap rebalances are penalized and ignored
 
-## Grading
+## Live Demo
 
-Each completed episode returns terminal grading in `info.episode_summary`:
-- `raw_reward`
-- `baseline_reward`
-- `target_reward`
-- `heuristic_reward`
-- `graded_score`
+Hugging Face Space:
+- [rishavutk/fleetmind](https://huggingface.co/spaces/rishavutk/fleetmind)
 
-`graded_score` is normalized to `[0.0, 1.0]`.
+Health endpoint:
+- [Space health](https://rishavutk-fleetmind.hf.space/health)
 
-## Inference Contract
+## Try It
 
-The root `inference.py` is the required hackathon baseline script.
+If you want to explore Fleetmind through the codebase or the live Space, the main entrypoints are:
+- [app.py](/C:/Users/risha/Documents/New project/app.py)
+- [inference.py](/C:/Users/risha/Documents/New project/inference.py)
+- [openenv.yaml](/C:/Users/risha/Documents/New project/openenv.yaml)
+- [validate_submission.py](/C:/Users/risha/Documents/New project/validate_submission.py)
 
-It is:
-- LLM-first when env vars are available
-- deterministic-fallback when model config is missing or provider calls fail
-- structured-stdout compliant with `[START]`, `[STEP]`, and `[END]`
+The benchmark exposes a simple episode loop:
+- `reset`
+- `state`
+- `step`
 
-Environment variable handling:
-- API key precedence: `HF_TOKEN`, then `OPENAI_API_KEY`
-- base URL: `API_BASE_URL` if present
-- model: `MODEL_NAME` if present
+That makes it easy to plug in:
+- LLM agents
+- scripted heuristics
+- black-box evaluation agents
+- external orchestrator policies
 
-The baseline always uses the OpenAI client library for LLM calls.
+## Why It Matters
 
-## Local Setup
+A lot of real work does not look like question answering. It looks like:
+- monitoring a changing system
+- reallocating limited resources
+- acting before the full picture is visible
+- absorbing the cost of bad early decisions
 
-Install dependencies:
+Fleetmind brings that style of decision making into a compact benchmark loop.
 
-```bash
-python -m pip install -r requirements.txt
-```
+## Project Map
 
-Run the submission baseline:
+Important files:
+- [README.md](/C:/Users/risha/Documents/New project/README.md)
+- [HACKATHON_REQUIREMENTS.md](/C:/Users/risha/Documents/New project/HACKATHON_REQUIREMENTS.md)
+- [PROJECT_SPEC.md](/C:/Users/risha/Documents/New project/PROJECT_SPEC.md)
+- [src/delivery_dispatch_v3](/C:/Users/risha/Documents/New project/src/delivery_dispatch_v3)
+- [docs/v3_blackbox_subagent_contract.md](/C:/Users/risha/Documents/New project/docs/v3_blackbox_subagent_contract.md)
 
-```bash
-python inference.py
-```
+## What Makes It Cool
 
-Run the pre-submission validator:
+Fleetmind is not just "delivery dispatch with JSON."
 
-```bash
-python validate_submission.py
-```
+It turns delivery operations into an agent benchmark where the model has to think like a dispatcher:
+- where should capacity move before demand becomes obvious?
+- which signals are real and which are decoys?
+- when is it better to hedge than to commit?
 
-Run the API locally:
-
-```bash
-uvicorn app:app --host 0.0.0.0 --port 7860
-```
-
-Example resets:
-
-```bash
-curl -X POST "http://127.0.0.1:7860/reset?task_id=easy_dispatch"
-curl -X POST "http://127.0.0.1:7860/reset?task_id=hard_dispatch&seed=123456"
-curl -X POST "http://127.0.0.1:7860/reset"
-```
-
-## Hugging Face Space
-
-This repo is prepared for a Docker Space:
-- SDK: `Docker`
-- app port: `7860`
-- visibility: `Public`
-
-Recommended environment variables:
-- `HF_TOKEN`
-- `OPENAI_API_KEY`
-- `API_BASE_URL`
-- `MODEL_NAME`
-
-## Files
-
-- `openenv.yaml`: submission metadata
-- `inference.py`: required baseline script
-- `validate_submission.py`: local preflight
-- `src/delivery_dispatch_v3/`: benchmark core
-- `HACKATHON_REQUIREMENTS.md`: validator-facing requirements reference
+That makes Fleetmind a benchmark for real-world orchestration behavior, not just single-step response quality.
