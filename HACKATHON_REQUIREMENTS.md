@@ -120,6 +120,9 @@ Practical interpretation after organizer clarification:
 - support env-var-driven external model usage cleanly
 - do not require tokens for the submission to execute
 - provide a reliable self-contained path for evaluation
+- use the OpenAI client for all LLM calls
+- for this repo, prefer `HF_TOKEN` over `OPENAI_API_KEY` when both are present
+- the active submission backend is `v3`, not the older `v1` delivery path
 
 Observed integration note during implementation:
 - the Hugging Face OpenAI-compatible path can be configured correctly with env vars

@@ -1,93 +1,94 @@
 ---
-title: Delivery Dispatch OpenEnv
+title: Fleetmind V3 OpenEnv
 sdk: docker
 app_port: 7860
 ---
 
-# Delivery Dispatch OpenEnv
+# Fleetmind V3 OpenEnv
 
-Deterministic last-mile delivery dispatch environment for the Meta x Scaler OpenEnv hackathon.
+Fleetmind V3 is a delivery benchmark for the Meta x Scaler OpenEnv hackathon. Agents allocate couriers across zones under noisy visible demand while the evaluator grades against an exact privileged dynamic program over the hidden future.
 
-This environment is designed for LLM-driven dispatch decision making: an agent assigns limited delivery agents to dynamic orders under deadlines, congestion, and reward tradeoffs.
+The root submission path is now `v3`:
+- root `app.py`
+- root `openenv.yaml`
+- root `inference.py`
+- root `validate_submission.py`
 
-The submission is also self-contained and reproducible:
-- it runs without private API keys
-- it does not hard-fail when model env vars are missing
-- it supports optional external model usage through environment variables
+## Public Tasks
 
-## Submission Notes
+- `easy_dispatch`
+- `medium_dispatch`
+- `hard_dispatch`
 
-- keep the GitHub repository public for evaluation
-- keep the Hugging Face Space public for evaluation
-- do not commit private API keys
-- local development may use a `.env` file, but production/evaluation config should come from environment variables
+These public task ids map internally to curated `v3` seed pools. Agents only see the public task id and public seed.
 
-## Tasks
+## API
 
-- `low_demand`: easy benchmark with light pressure and mostly stable hotspot behavior
-- `high_demand`: medium benchmark with stronger pressure and slower world evolution
-- `hotspot_congestion`: hard benchmark with seeded hotspot and congestion shifts
+Endpoints:
+- `GET /health`
+- `POST /reset`
+- `GET /state`
+- `POST /step`
 
-## Observation Space
+`POST /reset` behavior:
+- with `task_id`, starts a fresh episode in that tier
+- with `seed`, deterministically maps the public seed to a hidden curated test case
+- with no `seed`, randomly selects a hidden curated test case
+- with no `task_id`, randomly chooses one of the three public tasks
 
-Each observation includes:
-- simulation time and episode horizon
-- current decision step and configured max decision steps
-- grid dimensions, congestion zones, and hotspots
-- agent states
-- active visible orders
-- minimal reward/error feedback
-- compact task metrics
+Observations include:
+- `task_id`
+- `round_index`
+- `remaining_rounds`
+- current zone snapshots
+- feedback
+- `scenario_info` with public seed and fleet limits
 
-Design note:
-- observations are intentionally closer to raw environment state than to a planner helper API
-- derived hints such as nearest-agent suggestions or feasibility flags are not populated for the agent
-- future demand schedules are not exposed through the API
-
-Typed model:
-- `delivery_dispatch.models.Observation`
-
-## Action Space
-
-The policy returns strict JSON:
+Actions use strict JSON:
 
 ```json
 {
-  "assignments": [
-    {"agent_id": "a1", "order_id": "o4"}
-  ],
-  "rejections": ["o8"]
+  "target_allocations": [
+    {"zone_id": "north", "courier_count": 2},
+    {"zone_id": "east", "courier_count": 1},
+    {"zone_id": "south", "courier_count": 1},
+    {"zone_id": "west", "courier_count": 2}
+  ]
 }
 ```
 
 Rules:
-- only idle agents can be assigned
-- each agent can take at most one order
-- each order can be assigned at most once
-- rejections explicitly remove visible unassigned orders from play
-- invalid assignments are ignored and penalized
+- include every zone exactly once
+- courier counts must sum to the total courier count
+- negative counts are invalid
+- moves above the per-round reposition cap are penalized and ignored
 
-Typed model:
-- `delivery_dispatch.models.Action`
+## Grading
 
-## Reward
+Each completed episode returns terminal grading in `info.episode_summary`:
+- `raw_reward`
+- `baseline_reward`
+- `target_reward`
+- `heuristic_reward`
+- `graded_score`
 
-Reward is shaped over the episode:
-- positive reward for on-time completion
-- small marginal bonus for earlier completion
-- smoothly decayed reward for late completion, capped at zero for served orders
-- penalties for explicit order rejection
-- penalties for expired orders that pass the service cutoff
-- penalties for invalid actions
-- penalties for avoidable idle capacity
+`graded_score` is normalized to `[0.0, 1.0]`.
 
-Feedback is intentionally sparse:
-- `last_step_reward`
-- `cumulative_reward`
-- compact error counts such as late deliveries, expired orders, and rejected orders
+## Inference Contract
 
-Typed model:
-- `delivery_dispatch.models.Reward`
+The root `inference.py` is the required hackathon baseline script.
+
+It is:
+- LLM-first when env vars are available
+- deterministic-fallback when model config is missing or provider calls fail
+- structured-stdout compliant with `[START]`, `[STEP]`, and `[END]`
+
+Environment variable handling:
+- API key precedence: `HF_TOKEN`, then `OPENAI_API_KEY`
+- base URL: `API_BASE_URL` if present
+- model: `MODEL_NAME` if present
+
+The baseline always uses the OpenAI client library for LLM calls.
 
 ## Local Setup
 
@@ -97,140 +98,49 @@ Install dependencies:
 python -m pip install -r requirements.txt
 ```
 
-Run deterministic scoring locally:
+Run the submission baseline:
 
 ```bash
 python inference.py
 ```
 
-Run preflight validation:
+Run the pre-submission validator:
 
 ```bash
 python validate_submission.py
 ```
 
-Run the thin API locally:
+Run the API locally:
 
 ```bash
-uvicorn app:app --host 0.0.0.0 --port 8000
+uvicorn app:app --host 0.0.0.0 --port 7860
 ```
 
-You can start a fresh episode with a custom decision budget through:
+Example resets:
 
 ```bash
-curl -X POST "http://127.0.0.1:8000/reset?task_id=high_demand&max_decision_steps=40"
+curl -X POST "http://127.0.0.1:7860/reset?task_id=easy_dispatch"
+curl -X POST "http://127.0.0.1:7860/reset?task_id=hard_dispatch&seed=123456"
+curl -X POST "http://127.0.0.1:7860/reset"
 ```
 
-You can also request a reproducible seeded variant of a task:
+## Hugging Face Space
 
-```bash
-curl -X POST "http://127.0.0.1:8000/reset?task_id=high_demand&max_decision_steps=40&seed=7"
-```
-
-If `seed` is omitted, the environment generates one and returns it through `scenario_info.used_seed` so the same run can be replayed later.
-
-## Non-LLM Evaluators
-
-This environment is intentionally usable by any evaluator, not just an LLM.
-
-Any external evaluator can:
-- call `POST /reset` to start a fresh episode
-- read the returned observation or call `GET /state`
-- choose assignments/rejections with a heuristic, planner, search policy, or custom model
-- call `POST /step` until `done = true`
-
-This makes the environment suitable for:
-- deterministic baseline policies
-- scripted evaluators
-- search or optimization agents
-- LLM-based agents
-
-There is a tiny example API client here:
-- `scripts/example_http_client.py`
-
-Example usage:
-
-```bash
-python scripts/example_http_client.py --task_id high_demand --seed 7 --max_decision_steps 25
-```
-
-## Inference Modes
-
-### Default self-contained mode
-
-By default, `inference.py` runs a deterministic local dispatch policy so the submission stays reproducible and does not depend on external credentials.
-
-### Optional external model mode
-
-If these environment variables are set, `inference.py` can use the OpenAI client path instead:
-- `API_BASE_URL`
-- `MODEL_NAME`
-- `HF_TOKEN`
-
-Without them, the submission still runs using the built-in policy.
-If they are present but the provider call fails at runtime, the scoring path falls back to the built-in target policy instead of crashing.
-
-For local development, you can copy `.env.example` and set variables in your shell or local `.env` workflow. Do not commit secrets.
-
-Practical note:
-- the external Hugging Face/OpenAI-compatible path is implemented and can be wired with environment variables
-- live provider usage may still depend on available Hugging Face inference credits or billing
-- because of that, the self-contained mode remains the default submission-safe path
-- provider-side failures such as auth errors, quota exhaustion, or temporary API issues should not break local scoring or submission execution
-
-## Docker
-
-Build:
-
-```bash
-docker build -t delivery-dispatch-openenv .
-```
-
-Run:
-
-```bash
-docker run -p 7860:7860 delivery-dispatch-openenv
-```
-
-The container serves the API with:
-- `GET /health`
-- `POST /reset`
-- `GET /state`
-- `POST /step`
-
-Episode termination:
-- episodes end when the environment reaches `done = true`
-- a configurable `max_decision_steps` cap can be passed to `/reset`
-- when the decision cap is reached, future unseen orders are ignored, assigned work is terminally resolved, and visible unassigned work is expired for final scoring
-
-Reproducibility note:
-- `low_demand` is lightly varied
-- `high_demand` is intentionally steadier
-- `hotspot_congestion` is the main seeded dynamic robustness task
-
-## Hugging Face Spaces
-
-This repo is prepared for a Docker-based Space:
-- root `Dockerfile`
-- root `app.py`
-- README front matter with `sdk: docker`
-- service port `7860`
-
-Recommended Space configuration:
+This repo is prepared for a Docker Space:
 - SDK: `Docker`
 - app port: `7860`
 - visibility: `Public`
-- environment variables:
-  - `API_BASE_URL`
-  - `MODEL_NAME`
-  - `HF_TOKEN`
+
+Recommended environment variables:
+- `HF_TOKEN`
+- `OPENAI_API_KEY`
+- `API_BASE_URL`
+- `MODEL_NAME`
 
 ## Files
 
-- `PROJECT_SPEC.md`: environment design spec
-- `HACKATHON_REQUIREMENTS.md`: distilled submission requirements
-- `.env.example`: local env var template without secrets
-- `openenv.yaml`: OpenEnv submission metadata
-- `inference.py`: root scoring entrypoint
-- `validate_submission.py`: local preflight validator
-- `src/delivery_dispatch/`: simulator, models, policies, grading, and API
+- `openenv.yaml`: submission metadata
+- `inference.py`: required baseline script
+- `validate_submission.py`: local preflight
+- `src/delivery_dispatch_v3/`: benchmark core
+- `HACKATHON_REQUIREMENTS.md`: validator-facing requirements reference

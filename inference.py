@@ -1,116 +1,191 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
+
+from openai import OpenAI
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from delivery_dispatch.environment import DeliveryDispatchEnv
-from delivery_dispatch.grading import grade_trajectory, summarize_results
-from delivery_dispatch.llm import choose_action_with_llm, llm_configured
-from delivery_dispatch.models import Observation
-from delivery_dispatch.policies import ActionDict, baseline_policy, target_policy
+from delivery_dispatch_v3.environment import V3DeliveryDispatchEnv
+from delivery_dispatch_v3.models import V3Action, V3Observation
+from delivery_dispatch_v3.policies import heuristic_policy
 
 
-PolicyFn = Callable[[dict], ActionDict]
-EVALUATION_SEEDS = {
-    "low_demand": 101,
-    "high_demand": 202,
-    "hotspot_congestion": 303,
+API_BASE_URL = os.getenv("API_BASE_URL")
+MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4.1-mini")
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY")
+
+ENV_NAME = "fleetmind_v3"
+EVALUATION_PUBLIC_SEEDS = {
+    "easy_dispatch": 17031,
+    "medium_dispatch": 27031,
+    "hard_dispatch": 37031,
 }
+PolicyFn = Callable[[V3Observation], V3Action]
+SYSTEM_PROMPT = (
+    "You are playing a delivery fleet allocation benchmark. "
+    "Return JSON only with the shape "
+    "{\"target_allocations\": [{\"zone_id\": \"...\", \"courier_count\": 0}]}. "
+    "You will be given zone-level courier counts, visible demand, per-order rewards, "
+    "and congestion multipliers. Optimize long-term cumulative reward, not just immediate demand. "
+    "Respect the total courier count and include every zone exactly once."
+)
 
 
-def run_policy(task_id: str, policy: PolicyFn, seed: int | None = None) -> tuple[float, dict[str, int]]:
-    env = DeliveryDispatchEnv(scenario_name=task_id)
-    observation = env.reset(seed=seed)
-
-    done = False
-    while not done:
-        action = policy(observation.model_dump(mode="json"))
-        result = env.step(action)
-        observation = result.observation
-        done = result.done
-
-    return env.cumulative_reward, dict(env.stats)
+def _format_bool(value: bool) -> str:
+    return "true" if value else "false"
 
 
-def run_llm_policy(task_id: str, seed: int | None = None) -> tuple[float, dict[str, int], dict[str, object]]:
-    env = DeliveryDispatchEnv(scenario_name=task_id)
-    observation = env.reset(seed=seed)
-    fallback_used = False
-    fallback_reason = ""
+def _format_reward(value: float) -> str:
+    return f"{value:.4f}"
 
-    done = False
-    while not done:
-        if fallback_used:
-            action = target_policy(observation.model_dump(mode="json"))
-        else:
-            try:
-                action = choose_action_with_llm(observation)
-            except Exception as exc:
-                fallback_used = True
-                fallback_reason = f"{type(exc).__name__}: {exc}"
-                action = target_policy(observation.model_dump(mode="json"))
-        result = env.step(action)
-        observation = result.observation
-        done = result.done
 
-    return env.cumulative_reward, dict(env.stats), {
-        "fallback_used": fallback_used,
-        "fallback_reason": fallback_reason,
+def _action_str(action: V3Action) -> str:
+    return json.dumps(action.model_dump(mode="json"), separators=(",", ":"))
+
+
+def _print_start(task_id: str) -> None:
+    print(f"[START] task={task_id} env={ENV_NAME} model={MODEL_NAME}", flush=True)
+
+
+def _print_step(step_index: int, action: V3Action, reward: float, done: bool, error: str | None) -> None:
+    error_value = json.dumps(error) if error is not None else "null"
+    print(
+        f"[STEP] step={step_index} action={_action_str(action)} "
+        f"reward={_format_reward(reward)} done={_format_bool(done)} error={error_value}",
+        flush=True,
+    )
+
+
+def _print_end(success: bool, rewards: list[float], graded_score: float | None = None) -> None:
+    reward_values = ",".join(_format_reward(value) for value in rewards)
+    graded = "null" if graded_score is None else _format_reward(graded_score)
+    print(
+        f"[END] success={_format_bool(success)} steps={len(rewards)} rewards={reward_values} graded_score={graded}",
+        flush=True,
+    )
+
+
+def llm_configured() -> bool:
+    return bool(API_KEY and MODEL_NAME)
+
+
+def build_client() -> OpenAI:
+    kwargs: dict[str, Any] = {"api_key": API_KEY}
+    if API_BASE_URL:
+        kwargs["base_url"] = API_BASE_URL
+    return OpenAI(**kwargs)
+
+
+def parse_action(raw_text: str) -> V3Action:
+    try:
+        payload: dict[str, Any] = json.loads(raw_text)
+    except json.JSONDecodeError:
+        start = raw_text.find("{")
+        end = raw_text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return V3Action()
+        try:
+            payload = json.loads(raw_text[start : end + 1])
+        except json.JSONDecodeError:
+            return V3Action()
+    try:
+        return V3Action.model_validate(payload)
+    except Exception:
+        return V3Action()
+
+
+def choose_action_with_llm(observation: V3Observation) -> V3Action:
+    client = build_client()
+    response = client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": json.dumps(observation.model_dump(mode="json"), separators=(",", ":")),
+            },
+        ],
+        temperature=0.1,
+    )
+    raw_text = response.choices[0].message.content or ""
+    return parse_action(raw_text)
+
+
+def fallback_policy(observation: V3Observation) -> V3Action:
+    return heuristic_policy(observation)
+
+
+def choose_action(observation: V3Observation, prefer_llm: bool) -> tuple[V3Action, str | None]:
+    if not prefer_llm or not llm_configured():
+        return fallback_policy(observation), None if not prefer_llm else "LLM config missing; using deterministic fallback"
+    try:
+        return choose_action_with_llm(observation), None
+    except Exception as exc:
+        return fallback_policy(observation), str(exc)
+
+
+def run_task(task_id: str, seed: int, prefer_llm: bool = True) -> dict[str, Any]:
+    env = V3DeliveryDispatchEnv(default_task_id=task_id)
+    observation = env.reset(task_id=task_id, seed=seed)
+    rewards: list[float] = []
+    step_index = 0
+    success = False
+    final_summary: dict[str, Any] | None = None
+
+    _print_start(task_id)
+
+    try:
+        done = False
+        while not done:
+            step_index += 1
+            action, error = choose_action(observation, prefer_llm=prefer_llm)
+            result = env.step(action)
+            observation = result.observation
+            rewards.append(result.reward.step_reward)
+            done = result.done
+            if done:
+                final_summary = result.info.get("episode_summary") if isinstance(result.info, dict) else None
+            _print_step(step_index, action, result.reward.step_reward, done, error)
+        success = True
+    except Exception as exc:
+        fallback_action = V3Action()
+        _print_step(step_index + 1, fallback_action, 0.0, True, str(exc))
+    finally:
+        graded_score = None if final_summary is None else float(final_summary["graded_score"])
+        _print_end(success, rewards, graded_score=graded_score)
+
+    return {
+        "task_id": task_id,
+        "seed": seed,
+        "raw_reward": 0.0 if final_summary is None else float(final_summary["raw_reward"]),
+        "baseline_reward": 0.0 if final_summary is None else float(final_summary["baseline_reward"]),
+        "target_reward": 0.0 if final_summary is None else float(final_summary["target_reward"]),
+        "score": 0.0 if final_summary is None else float(final_summary["graded_score"]),
+        "heuristic_reward": None if final_summary is None else final_summary.get("heuristic_reward"),
     }
 
 
-def score_tasks(policy_name: str) -> dict:
-    weights = {
-        "low_demand": 0.2,
-        "high_demand": 0.3,
-        "hotspot_congestion": 0.5,
+def score_tasks(policy_name: str = "baseline") -> dict[str, Any]:
+    prefer_llm = policy_name != "baseline"
+    task_results: list[dict[str, Any]] = []
+    for task_id, seed in EVALUATION_PUBLIC_SEEDS.items():
+        task_results.append(run_task(task_id=task_id, seed=seed, prefer_llm=prefer_llm))
+    overall_score = sum(task["score"] for task in task_results) / len(task_results)
+    return {
+        "tasks": task_results,
+        "overall_score": overall_score,
+        "mode": "llm-first" if prefer_llm else "deterministic-fallback",
     }
-    task_results = []
-    llm_runtime = {
-        "configured": llm_configured(),
-        "fallback_used": False,
-        "fallback_reasons": {},
-    }
-
-    for task_id in weights:
-        task_seed = EVALUATION_SEEDS[task_id]
-        baseline_reward, _ = run_policy(task_id, baseline_policy, seed=task_seed)
-        target_reward, _ = run_policy(task_id, target_policy, seed=task_seed)
-        lower_bound = min(baseline_reward, target_reward)
-        upper_bound = max(baseline_reward, target_reward)
-        if policy_name == "llm":
-            raw_reward, raw_stats, llm_meta = run_llm_policy(task_id, seed=task_seed)
-            if llm_meta["fallback_used"]:
-                llm_runtime["fallback_used"] = True
-                llm_runtime["fallback_reasons"][task_id] = llm_meta["fallback_reason"]
-        elif policy_name == "target":
-            raw_reward, raw_stats = run_policy(task_id, target_policy, seed=task_seed)
-        else:
-            raw_reward, raw_stats = run_policy(task_id, baseline_policy, seed=task_seed)
-
-        task_results.append(
-            grade_trajectory(
-                task_id=task_id,
-                trajectory_reward=raw_reward,
-                baseline_reward=lower_bound,
-                target_reward=upper_bound,
-                stats=raw_stats,
-            )
-        )
-
-    result = summarize_results(task_results, weights)
-    if policy_name == "llm":
-        result["llm_runtime"] = llm_runtime
-    return result
 
 
 def main() -> None:
-    policy_name = "llm" if llm_configured() else "baseline"
-    print(json.dumps({"policy": policy_name, **score_tasks(policy_name)}, indent=2))
+    for task_id, seed in EVALUATION_PUBLIC_SEEDS.items():
+        run_task(task_id=task_id, seed=seed, prefer_llm=True)
 
 
 if __name__ == "__main__":

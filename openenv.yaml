@@ -1,23 +1,23 @@
-name: delivery-dispatch-openenv
+name: fleetmind-v3-openenv
 version: 0.1.0
 description: >
-  Deterministic last-mile delivery dispatch environment where an agent assigns
-  limited couriers to dynamic orders under deadlines, congestion, and reward tradeoffs.
+  Zone-level delivery fleet allocation benchmark with hidden future demand,
+  exact evaluator-side grading, and bounded sequential planning.
 entrypoints:
-  python_api: src/delivery_dispatch/environment.py
+  python_api: src/delivery_dispatch_v3/environment.py
   inference: inference.py
-  http_api: src/delivery_dispatch/api.py
+  http_api: src/delivery_dispatch_v3/api.py
   preflight: validate_submission.py
 models:
-  observation: delivery_dispatch.models.Observation
-  action: delivery_dispatch.models.Action
-  reward: delivery_dispatch.models.Reward
+  observation: delivery_dispatch_v3.models.V3Observation
+  action: delivery_dispatch_v3.models.V3Action
+  reward: delivery_dispatch_v3.models.V3Reward
 tasks:
-  - id: low_demand
+  - id: easy_dispatch
     difficulty: easy
-  - id: high_demand
+  - id: medium_dispatch
     difficulty: medium
-  - id: hotspot_congestion
+  - id: hard_dispatch
     difficulty: hard
 validation:
   required_methods:
