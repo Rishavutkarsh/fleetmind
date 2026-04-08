@@ -10,6 +10,7 @@ from .policies import baseline_policy, heuristic_policy
 from .solver import solve_exact
 
 STRICT_SCORE_EPSILON = 1e-4
+BASELINE_SCORE_ANCHOR = 0.05
 
 
 def grade_episode(task_id: str, seed: int, raw_reward: float) -> V3TaskResult:
@@ -72,8 +73,15 @@ def timed_optimal_reward(task_id: str, seed: int) -> tuple[float, float]:
 
 def normalize_score(raw_reward: float, baseline_reward: float, target_reward: float) -> float:
     lower = STRICT_SCORE_EPSILON
+    baseline_anchor = BASELINE_SCORE_ANCHOR
     upper = 1.0 - STRICT_SCORE_EPSILON
     if target_reward <= baseline_reward:
-        return upper if raw_reward >= target_reward else lower
-    score = (raw_reward - baseline_reward) / (target_reward - baseline_reward)
+        return upper if raw_reward >= target_reward else baseline_anchor
+
+    gap = target_reward - baseline_reward
+    normalized = (raw_reward - baseline_reward) / gap
+    if normalized >= 0.0:
+        score = baseline_anchor + normalized * (upper - baseline_anchor)
+    else:
+        score = baseline_anchor + normalized * (baseline_anchor - lower)
     return max(lower, min(upper, score))

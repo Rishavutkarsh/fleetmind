@@ -18,6 +18,7 @@ from delivery_dispatch_v3.policies import heuristic_policy
 API_BASE_URL = os.getenv("API_BASE_URL")
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4.1-mini")
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY")
+SUCCESS_SCORE_THRESHOLD = 0.1
 
 ENV_NAME = "fleetmind_v3"
 EVALUATION_PUBLIC_SEEDS = {
@@ -41,7 +42,7 @@ def _format_bool(value: bool) -> str:
 
 
 def _format_reward(value: float) -> str:
-    return f"{value:.4f}"
+    return f"{value:.2f}"
 
 
 def _action_str(action: V3Action) -> str:
@@ -53,7 +54,7 @@ def _print_start(task_id: str) -> None:
 
 
 def _print_step(step_index: int, action: V3Action, reward: float, done: bool, error: str | None) -> None:
-    error_value = json.dumps(error) if error is not None else "null"
+    error_value = error if error is not None else "null"
     print(
         f"[STEP] step={step_index} action={_action_str(action)} "
         f"reward={_format_reward(reward)} done={_format_bool(done)} error={error_value}",
@@ -61,11 +62,11 @@ def _print_step(step_index: int, action: V3Action, reward: float, done: bool, er
     )
 
 
-def _print_end(success: bool, rewards: list[float], graded_score: float | None = None) -> None:
+def _print_end(success: bool, rewards: list[float], score: float | None = None) -> None:
     reward_values = ",".join(_format_reward(value) for value in rewards)
-    graded = "null" if graded_score is None else _format_reward(graded_score)
+    score_value = "null" if score is None else f"{score:.4f}"
     print(
-        f"[END] success={_format_bool(success)} steps={len(rewards)} rewards={reward_values} graded_score={graded}",
+        f"[END] success={_format_bool(success)} steps={len(rewards)} score={score_value} rewards={reward_values}",
         flush=True,
     )
 
@@ -156,8 +157,9 @@ def run_task(task_id: str, seed: int, prefer_llm: bool = True) -> dict[str, Any]
         fallback_action = V3Action()
         _print_step(step_index + 1, fallback_action, 0.0, True, str(exc))
     finally:
-        graded_score = None if final_summary is None else float(final_summary["graded_score"])
-        _print_end(success, rewards, graded_score=graded_score)
+        score = None if final_summary is None else float(final_summary["graded_score"])
+        success = success and score is not None and score >= SUCCESS_SCORE_THRESHOLD
+        _print_end(success, rewards, score=score)
 
     return {
         "task_id": task_id,
