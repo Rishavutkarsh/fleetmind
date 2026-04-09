@@ -3,32 +3,33 @@ from __future__ import annotations
 import secrets
 
 from .generator import generate_recipe
-from .grading import rollout_policy, timed_optimal_reward
+from .grading import normalize_score, rollout_policy, timed_optimal_reward
 from .models import SeedMetadata
+from .policies import stay_policy
 
 
 TRAIN_SEEDS: dict[str, tuple[int, ...]] = {
     "v3_easy_dispatch": (143, 129, 111, 147, 155, 131, 107, 141, 151, 119, 139, 123),
     "v3_medium_dispatch": (231, 237, 243, 219, 203, 215, 209, 255, 227, 251, 235, 233),
-    "v3_hard_dispatch": (311, 325, 343, 359, 315, 303, 345, 331, 337, 319, 339, 307),
+    "v3_hard_dispatch": (351, 337, 323, 327, 347, 341, 321, 331, 349, 301, 357, 355),
 }
 
 EVAL_SEEDS: dict[str, tuple[int, ...]] = {
     "v3_easy_dispatch": (423, 409, 407, 401, 435, 427, 419, 403),
     "v3_medium_dispatch": (529, 511, 533, 505, 507, 539, 515, 537),
-    "v3_hard_dispatch": (607, 625, 603, 615, 601, 635, 631, 623),
+    "v3_hard_dispatch": (601, 635, 639, 619, 617, 607, 611, 613),
 }
 
 OFFICIAL_SEEDS: dict[str, tuple[int, ...]] = {
     "v3_easy_dispatch": (703, 737, 723, 709),
     "v3_medium_dispatch": (819, 837, 807, 827),
-    "v3_hard_dispatch": (935, 913, 907, 919),
+    "v3_hard_dispatch": (907, 921, 913, 909),
 }
 
 TEST_SEEDS: dict[str, tuple[int, ...]] = {
     "v3_easy_dispatch": (791, 753, 805, 767, 793, 775, 787, 771, 807, 779, 777, 819, 783, 815, 765, 751),
     "v3_medium_dispatch": (875, 857, 879, 867, 859, 849, 851, 893, 887, 843, 871, 885, 847, 855, 873, 863),
-    "v3_hard_dispatch": (991, 981, 971, 1011, 975, 1019, 1013, 979, 973, 977, 989, 1017, 965, 1015, 1009, 993),
+    "v3_hard_dispatch": (989, 995, 973, 959, 983, 1009, 975, 987, 1005, 945, 979, 997, 1015, 957, 943, 1001),
 }
 
 CANDIDATE_SEEDS: dict[str, dict[str, tuple[int, ...]]] = {
@@ -115,14 +116,40 @@ def is_seed_admissible(
 def curate_seed_pool(task_id: str, candidate_seeds: tuple[int, ...], limit: int) -> tuple[int, ...]:
     metadatas = [build_seed_metadata(task_id, seed) for seed in candidate_seeds]
     admissible = [metadata for metadata in metadatas if metadata.admissible]
-    admissible.sort(
-        key=lambda metadata: (
-            metadata.score_gap,
-            metadata.heuristic_gap,
-            -metadata.solver_runtime_ms,
-        ),
-        reverse=True,
-    )
+
+    if task_id == "v3_hard_dispatch":
+        hard_rows: list[tuple[SeedMetadata, float, float]] = []
+        for metadata in admissible:
+            stay_reward = rollout_episode_with_policy(task_id, metadata.seed, stay_policy)
+            stay_score = normalize_score(stay_reward, metadata.baseline_reward, metadata.target_reward)
+            hard_rows.append((metadata, stay_reward, stay_score))
+
+        hard_rows = [
+            row
+            for row in hard_rows
+            if (row[0].target_reward - row[1]) >= 18.0 and row[2] <= 0.32
+        ] or hard_rows
+
+        hard_rows.sort(
+            key=lambda row: (
+                row[0].target_reward - row[1],
+                row[0].score_gap,
+                -row[2],
+                row[0].heuristic_gap,
+                -row[0].solver_runtime_ms,
+            ),
+            reverse=True,
+        )
+        admissible = [row[0] for row in hard_rows]
+    else:
+        admissible.sort(
+            key=lambda metadata: (
+                metadata.score_gap,
+                metadata.heuristic_gap,
+                -metadata.solver_runtime_ms,
+            ),
+            reverse=True,
+        )
     chosen: list[int] = []
     seen_regimes: set[str] = set()
     for metadata in admissible:
@@ -138,6 +165,17 @@ def curate_seed_pool(task_id: str, candidate_seeds: tuple[int, ...], limit: int)
         if len(chosen) >= limit:
             break
     return tuple(chosen)
+
+
+def rollout_episode_with_policy(task_id: str, seed: int, policy) -> float:
+    from .environment import V3DeliveryDispatchEnv
+
+    env = V3DeliveryDispatchEnv(default_task_id=task_id)
+    observation = env.reset_internal(task_id=task_id, internal_seed=seed)
+    while not env.done:
+        result = env.step(policy(observation), grade_terminal=False)
+        observation = result.observation
+    return env.cumulative_reward
 
 
 def resolve_curated_seed(task_id: str, external_seed: int, pool_name: str = "test") -> int:

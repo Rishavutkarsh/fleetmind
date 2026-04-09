@@ -33,7 +33,7 @@ PROFILES: dict[str, DifficultyProfile] = {
         total_rounds=10,
         max_repositions_per_round=3,
         missed_order_penalty=6.0,
-        move_cost_weight=1.2,
+        move_cost_weight=1.05,
         runtime_budget_ms=900.0,
     ),
 }
@@ -137,12 +137,15 @@ def _build_round(
 
         premium_bonus = 0.0
         if zone_index == premium_zone_index and progress >= (0.45 if profile.task_id == "v3_hard_dispatch" else 0.3):
-            premium_bonus = 2.5 if profile.task_id == "v3_easy_dispatch" else 4.0
+            premium_bonus = 2.5 if profile.task_id == "v3_easy_dispatch" else 4.5
         reward_per_order.append(8.0 + premium_bonus)
 
         congestion = 1.0
         if world_regime == "congested_pivot" and progress >= 0.35 and zone_index in {decoy_zone_index, hot_zone_index}:
-            congestion = 1.5 if zone_index == hot_zone_index and progress < 0.6 else 1.25
+            if profile.task_id == "v3_hard_dispatch":
+                congestion = 1.35 if zone_index == hot_zone_index and progress < 0.6 else 1.18
+            else:
+                congestion = 1.5 if zone_index == hot_zone_index and progress < 0.6 else 1.25
         elif world_regime != "congested_pivot" and zone_index == decoy_zone_index and progress < 0.4:
             congestion = 1.15
         congestion_multiplier.append(congestion)
@@ -165,8 +168,8 @@ def _hot_component(task_id: str, progress: float, world_regime: WorldRegime, is_
             return round(4 * progress)
         return max(0, round(5 * (progress - 0.25)))
     if world_regime in {"decoy_then_shift", "congested_pivot"}:
-        return max(0, round(6 * (progress - 0.35)))
-    return max(0, round(5 * (progress - 0.2)))
+        return max(0, round(7 * (progress - 0.32)))
+    return max(0, round(6 * (progress - 0.18)))
 
 
 def _decoy_component(task_id: str, progress: float, world_regime: WorldRegime, is_decoy_zone: bool) -> int:

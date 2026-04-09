@@ -4,6 +4,15 @@ from .dynamics import Counts, count_moved
 from .models import V3Action, V3Observation
 
 
+def stay_policy(observation: V3Observation) -> V3Action:
+    return V3Action(
+        target_allocations=[
+            {"zone_id": zone.zone_id, "courier_count": zone.courier_count}
+            for zone in observation.zones
+        ]
+    )
+
+
 def baseline_policy(observation: V3Observation) -> V3Action:
     current_counts = tuple(zone.courier_count for zone in observation.zones)
     current_signal = [zone.visible_orders * zone.reward_per_order / zone.congestion_multiplier for zone in observation.zones]
